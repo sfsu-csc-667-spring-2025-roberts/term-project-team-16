@@ -4,7 +4,7 @@ import express from "express";
 import httpErrors from "http-errors";
 import morgan from "morgan";
 import * as path from "path";
-import rootRoutes from "./routes/root";
+import * as routes from "./routes";
 
 dotenv.config();
 
@@ -20,7 +20,8 @@ app.use(cookieParser());
 app.set("views", path.join(process.cwd(), "src", "server", "views"));
 app.set("view engine", "ejs");
 
-app.use("/", rootRoutes);
+app.use("/", routes.rootRoutes);
+app.use("/auth", routes.authRoutes);
 
 app.use((_request, _response, next) => {
   next(httpErrors(404));
