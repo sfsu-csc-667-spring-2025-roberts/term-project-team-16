@@ -8,5 +8,17 @@
 
     <h1>Welcome</h1>
     <p>This is the homepage.</p>
+
+    <section id="chat">
+      <div id="chat-messages" style="border:1px solid #ccc; height:200px; overflow:auto;"></div>
+      <form id="chat-form">
+        <input id="chat-input" name="message"
+               placeholder="Type a message…" required autocomplete="off" />
+        <button type="submit">Send</button>
+      </form>
+    </section>    
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script type="module" src="/js/lobby.js"></script>
   </body>
 </html>
