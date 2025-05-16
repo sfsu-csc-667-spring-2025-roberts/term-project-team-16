@@ -24,6 +24,7 @@
   },
   "homepage": "https://github.com/sfsu-csc-667-spring-2025-roberts/term-project-team-16#readme",
   "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
     "@types/connect-pg-simple": "^7.0.3",
     "@types/cookie-parser": "^1.4.8",
     "@types/dotenv": "^6.1.1",
@@ -39,6 +40,7 @@
   "dependencies": {
     "@types/socket.io": "^3.0.1",
     "@types/socket.io-client": "^1.4.36",
+    "bcrypt": "^6.0.0",
     "connect-pg-simple": "^10.0.0",
     "cookie-parser": "^1.4.7",
     "dotenv": "^16.5.0",

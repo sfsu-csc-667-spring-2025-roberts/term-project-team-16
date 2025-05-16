@@ -1,0 +1,26 @@
+@import "https://www.nerdfonts.com/assets/css/webfont.css";
+
+@import url("/css/includes/reset.css");
+@import url("/css/includes/variables.css");
+
+@import url("/css/includes/layout.css");
+@import url("/css/includes/menu.css");
+
+@import url("/css/includes/chat.css");
+
+@import url("/css/includes/landing.css");
+@import url("/css/includes/auth.css");
+@import url("/css/includes/lobby.css");
+@import url("/css/includes/games.css");
+@import url("/css/includes/create-game-form.css");
+
+body {
+  font-family: Verdana, Geneva, Tahoma, sans-serif;
+  font-size: var(--font-size);
+}
+
+.gravatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+}
