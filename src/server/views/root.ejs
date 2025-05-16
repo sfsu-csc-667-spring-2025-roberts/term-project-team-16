@@ -9,14 +9,30 @@
     <h1>Welcome</h1>
     <p>This is the homepage.</p>
 
-    <section id="chat">
-      <div id="chat-messages" style="border:1px solid #ccc; height:200px; overflow:auto;"></div>
-      <form id="chat-form">
-        <input id="chat-input" name="message"
-               placeholder="Type a message…" required autocomplete="off" />
-        <button type="submit">Send</button>
+    <div class="chat-container">
+      <h2>Lobby Chat</h2>
+      <ul id="lobby-chat-messages" class="chat-messages-list">
+          </ul>
+      <form id="lobby-message-form" class="chat-form">
+          <input type="text" id="lobby-message-input" placeholder="Type your message..." autocomplete="off" required />
+          <button type="submit">Send</button>
       </form>
-    </section>    
+  </div>
+  
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/lobby.js"></script> <style>
+  /* Basic Styling (add to your CSS file) */
+  .chat-container { border: 1px solid #ccc; padding: 10px; margin-top: 20px; max-width: 500px; }
+  .chat-messages-list { list-style-type: none; padding: 0; height: 200px; overflow-y: auto; border: 1px solid #eee; margin-bottom: 10px; }
+  .chat-messages-list li { padding: 5px; border-bottom: 1px dotted #eee; }
+  .chat-messages-list li:last-child { border-bottom: none; }
+  .chat-messages-list strong { color: #007bff; }
+  .chat-messages-list small { color: #888; font-size: 0.8em; margin-left: 10px; }
+  .chat-form { display: flex; }
+  .chat-form input { flex-grow: 1; padding: 8px; border: 1px solid #ccc; }
+  .chat-form button { padding: 8px 15px; border: none; background-color: #007bff; color: white; cursor: pointer; }
+  .chat-form button:hover { background-color: #0056b3; }
+  </style>
 
     <script src="/socket.io/socket.io.js"></script>
     <script type="module" src="/js/lobby.js"></script>
