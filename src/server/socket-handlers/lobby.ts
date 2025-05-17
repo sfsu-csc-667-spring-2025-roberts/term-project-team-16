@@ -8,8 +8,16 @@ interface ChatMessage {
     created_at: Date;
 }
 
-// Track active users in the lobby
+interface GameState {
+    id: string;
+    players: string[];
+    started: boolean;
+    createdAt: Date;
+}
+
+// Track active users and games
 const activeUsers = new Map<string, string>(); // socketId -> username
+const activeGames = new Map<string, GameState>(); // gameId -> GameState
 
 export default function handleLobbyConnection(socket: Socket): void {
     console.log(`[lobby] socket connected: ${socket.id}`);
@@ -91,10 +99,103 @@ export default function handleLobbyConnection(socket: Socket): void {
         }
     });
 
+    // Game management
+    socket.on('game:create', async (data, callback) => {
+        try {
+            const userId = (socket as any).userId;
+            const username = (socket as any).username;
+
+            if (!userId || !username) {
+                callback?.({ error: 'Not authenticated' });
+                return;
+            }
+
+            // Create new game in database
+            const result = await pool.query(
+                `INSERT INTO games (creator_id, created_at, status)
+                 VALUES ($1, NOW(), 'waiting')
+                 RETURNING game_id`,
+                [userId]
+            );
+
+            const gameId = result.rows[0].game_id;
+
+            // Add creator as first player
+            await pool.query(
+                `INSERT INTO game_players (game_id, user_id, joined_at)
+                 VALUES ($1, $2, NOW())`,
+                [gameId, userId]
+            );
+
+            // Track game in memory
+            activeGames.set(gameId, {
+                id: gameId,
+                players: [username],
+                started: false,
+                createdAt: new Date()
+            });
+
+            // Broadcast updated game list
+            socket.broadcast.emit('games:list', Array.from(activeGames.values()));
+            
+            callback?.({ gameId });
+        } catch (error) {
+            console.error('Error creating game:', error);
+            callback?.({ error: 'Failed to create game' });
+        }
+    });
+
+    socket.on('game:join', async ({ gameId }, callback) => {
+        try {
+            const userId = (socket as any).userId;
+            const username = (socket as any).username;
+
+            if (!userId || !username) {
+                callback?.({ error: 'Not authenticated' });
+                return;
+            }
+
+            const game = activeGames.get(gameId);
+            if (!game) {
+                callback?.({ error: 'Game not found' });
+                return;
+            }
+
+            if (game.players.length >= 4 || game.started) {
+                callback?.({ error: 'Game is full or already started' });
+                return;
+            }
+
+            // Add player to game in database
+            await pool.query(
+                `INSERT INTO game_players (game_id, user_id, joined_at)
+                 VALUES ($1, $2, NOW())`,
+                [gameId, userId]
+            );
+
+            // Update game state
+            game.players.push(username);
+            activeGames.set(gameId, game);
+
+            // Broadcast updated game list
+            socket.broadcast.emit('games:list', Array.from(activeGames.values()));
+            
+            callback?.({ success: true });
+        } catch (error) {
+            console.error('Error joining game:', error);
+            callback?.({ error: 'Failed to join game' });
+        }
+    });
+
+    socket.on('games:list', (callback) => {
+        callback?.(Array.from(activeGames.values()));
+    });
+
     // Handle disconnection
     socket.on('disconnect', () => {
         console.log(`[lobby] socket disconnected: ${socket.id}`);
-        if (username && activeUsers.has(socket.id)) {
+        const username = (socket as any).username;
+        if (username) {
             activeUsers.delete(socket.id);
             socket.broadcast.emit('lobby:userLeft', { username });
         }

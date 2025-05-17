@@ -11,7 +11,7 @@ import { Server as IOServer } from "socket.io";
 import * as path from "path";
 
 // Your existing imports
-import * as routes from "./routes"; // Assuming this imports { rootRoutes, authRoutes }
+import { rootRoutes, authRoutes, gameRoutes } from "./routes"; // Assuming this imports { rootRoutes, authRoutes }
 import { sessionMiddleware } from "./middleware/session"; // Assuming this is your configured express-session
 import { configureSockets } from "./config/socket";
 import initializeDatabase from "./db/init"; // Import database initializer
@@ -55,8 +55,9 @@ app.set("views", path.join(process.cwd(), "src", "server", "views"));
 app.set("view engine", "ejs");
 
 // Routes setup
-app.use("/", routes.rootRoutes);
-app.use("/auth", routes.authRoutes); // Your authentication routes
+app.use("/", rootRoutes);
+app.use("/auth", authRoutes);
+app.use("/api/games", gameRoutes); // Your game routes
 
 const PORT = process.env.PORT || 3000;
 

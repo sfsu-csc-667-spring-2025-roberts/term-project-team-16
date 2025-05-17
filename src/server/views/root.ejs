@@ -8,26 +8,47 @@
     <%- include("shared/header") %>
 
     <div class="landing-container">
-      <% if (locals.userId) { %>
-        <h1>Welcome to BS Card Game, <%= locals.username %>!</h1>
-      <% } else { %>
-        <h1>Welcome to BS Card Game!</h1>
-        <div class="cta-section">
-          <p>Join the game by <a href="/auth/login">logging in</a> or <a href="/auth/register">creating an account</a>.</p>
-        </div>
-      <% } %>
+      <div class="main-content">
+        <div class="left-column">
+          <% if (locals.userId) { %>
+            <h1>Welcome to BS Card Game, <%= locals.username %>!</h1>
+            <div class="game-controls">
+              <button id="create-game" class="btn primary">Create New Game</button>
+            </div>
+          <% } else { %>
+            <h1>Welcome to BS Card Game!</h1>
+            <div class="cta-section">
+              <p>Join the game by <a href="/auth/login">logging in</a> or <a href="/auth/register">creating an account</a>.</p>
+            </div>
+          <% } %>
 
-      <div class="chat-container">
-        <h2>Lobby Chat</h2>
-        <% if (!locals.userId) { %>
-          <p class="chat-notice">You can view the chat, but need to <a href="/auth/login">login</a> to participate.</p>
-        <% } %>
-        <ul id="lobby-chat-messages" class="chat-messages-list">
-        </ul>
-        <form id="lobby-message-form" class="chat-form">
-            <input type="text" id="lobby-message-input" placeholder="Type your message..." autocomplete="off" required />
-            <button type="submit">Send</button>
-        </form>
+          <div class="games-list">
+            <h2>Active Games</h2>
+            <div id="active-games" class="games-grid">
+              <!-- Games will be inserted here dynamically -->
+            </div>
+            <div class="pagination-controls">
+              <button id="prev-page" class="btn secondary" disabled>Previous</button>
+              <span id="page-info">Page 1</span>
+              <button id="next-page" class="btn secondary">Next</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="right-column">
+          <div class="chat-container">
+            <h2>Lobby Chat</h2>
+            <% if (!locals.userId) { %>
+              <p class="chat-notice">You can view the chat, but need to <a href="/auth/login">login</a> to participate.</p>
+            <% } %>
+            <ul id="lobby-chat-messages" class="chat-messages-list">
+            </ul>
+            <form id="lobby-message-form" class="chat-form">
+                <input type="text" id="lobby-message-input" placeholder="Type your message..." autocomplete="off" required />
+                <button type="submit">Send</button>
+            </form>
+          </div>
+        </div>
       </div>
     </div>
 

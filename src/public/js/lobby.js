@@ -148,3 +148,133 @@ function escapeHtml(unsafe) {
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
 }
+
+// Game-related functionality
+const createGameBtn = document.getElementById('create-game');
+const activeGamesContainer = document.getElementById('active-games');
+
+// Game list pagination state
+const gameState = {
+    currentPage: 1,
+    totalPages: 1
+};
+
+// Game list functions
+async function fetchGames(page = 1) {
+    try {
+        const response = await fetch(`/games?page=${page}&limit=10`);
+        const data = await response.json();
+        
+        const gamesGrid = document.getElementById('active-games');
+        gamesGrid.innerHTML = ''; // Clear existing games
+        
+        data.games.forEach(game => {
+            const gameElement = createGameElement(game);
+            gamesGrid.appendChild(gameElement);
+        });
+
+        // Update pagination
+        gameState.currentPage = data.pagination.currentPage;
+        gameState.totalPages = data.pagination.totalPages;
+        updatePaginationControls(data.pagination);
+    } catch (error) {
+        console.error('Error fetching games:', error);
+    }
+}
+
+function updatePaginationControls(pagination) {
+    const prevButton = document.getElementById('prev-page');
+    const nextButton = document.getElementById('next-page');
+    const pageInfo = document.getElementById('page-info');
+
+    if (prevButton && nextButton && pageInfo) {
+        prevButton.disabled = !pagination.hasPrevPage;
+        nextButton.disabled = !pagination.hasNextPage;
+        pageInfo.textContent = `Page ${pagination.currentPage} of ${pagination.totalPages}`;
+    }
+}
+
+function createGameElement(game) {
+    const div = document.createElement('div');
+    div.className = 'game-item';
+    div.innerHTML = `
+        <div class="game-info">
+            <span class="game-id">Game #${game.game_id}</span>
+            <span class="player-count">${game.players.length} players</span>
+        </div>
+        <div class="game-actions">
+            ${game.started_at ? 
+                '<span class="game-status">In Progress</span>' :
+                '<button class="btn join-game" data-game-id="' + game.game_id + '">Join Game</button>'
+            }
+        </div>
+    `;
+
+    // Add join game handler
+    const joinButton = div.querySelector('.join-game');
+    if (joinButton) {
+        joinButton.addEventListener('click', async () => {
+            const gameId = joinButton.getAttribute('data-game-id');
+            try {
+                const response = await fetch(`/games/${gameId}/join`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (response.ok) {
+                    window.location.href = `/games/${gameId}`;
+                } else {
+                    const error = await response.json();
+                    alert(error.error || 'Failed to join game');
+                }
+            } catch (error) {
+                console.error('Error joining game:', error);
+                alert('Failed to join game');
+            }
+        });
+    }
+
+    return div;
+}
+
+// Initialize pagination controls
+document.getElementById('prev-page')?.addEventListener('click', () => {
+    if (gameState.currentPage > 1) {
+        fetchGames(gameState.currentPage - 1);
+    }
+});
+
+document.getElementById('next-page')?.addEventListener('click', () => {
+    if (gameState.currentPage < gameState.totalPages) {
+        fetchGames(gameState.currentPage + 1);
+    }
+});
+
+// Create game button handler
+document.getElementById('create-game')?.addEventListener('click', async () => {
+    try {
+        const response = await fetch('/games', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (response.ok) {
+            const game = await response.json();
+            window.location.href = `/games/${game.id}`;
+        } else {
+            console.error('Failed to create game');
+        }
+    } catch (error) {
+        console.error('Error creating game:', error);
+    }
+});
+
+// Initial fetch of games
+fetchGames();
+
+// Refresh games list periodically
+setInterval(() => {
+    fetchGames(gameState.currentPage);
+}, 30000); // Refresh every 30 seconds
