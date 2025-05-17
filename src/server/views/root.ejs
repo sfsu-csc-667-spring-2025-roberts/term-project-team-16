@@ -1,40 +1,37 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>Home</title>
+    <title>BS Card Game</title>
+    <link rel="stylesheet" href="/css/main.css">
   </head>
   <body>
     <%- include("shared/header") %>
 
-    <h1>Welcome</h1>
-    <p>This is the homepage.</p>
+    <div class="landing-container">
+      <% if (locals.userId) { %>
+        <h1>Welcome to BS Card Game, <%= locals.username %>!</h1>
+      <% } else { %>
+        <h1>Welcome to BS Card Game!</h1>
+        <div class="cta-section">
+          <p>Join the game by <a href="/auth/login">logging in</a> or <a href="/auth/register">creating an account</a>.</p>
+        </div>
+      <% } %>
 
-    <div class="chat-container">
-      <h2>Lobby Chat</h2>
-      <ul id="lobby-chat-messages" class="chat-messages-list">
-          </ul>
-      <form id="lobby-message-form" class="chat-form">
-          <input type="text" id="lobby-message-input" placeholder="Type your message..." autocomplete="off" required />
-          <button type="submit">Send</button>
-      </form>
-  </div>
-  
-  <script src="/socket.io/socket.io.js"></script>
-  <script src="/js/lobby.js"></script> <style>
-  /* Basic Styling (add to your CSS file) */
-  .chat-container { border: 1px solid #ccc; padding: 10px; margin-top: 20px; max-width: 500px; }
-  .chat-messages-list { list-style-type: none; padding: 0; height: 200px; overflow-y: auto; border: 1px solid #eee; margin-bottom: 10px; }
-  .chat-messages-list li { padding: 5px; border-bottom: 1px dotted #eee; }
-  .chat-messages-list li:last-child { border-bottom: none; }
-  .chat-messages-list strong { color: #007bff; }
-  .chat-messages-list small { color: #888; font-size: 0.8em; margin-left: 10px; }
-  .chat-form { display: flex; }
-  .chat-form input { flex-grow: 1; padding: 8px; border: 1px solid #ccc; }
-  .chat-form button { padding: 8px 15px; border: none; background-color: #007bff; color: white; cursor: pointer; }
-  .chat-form button:hover { background-color: #0056b3; }
-  </style>
+      <div class="chat-container">
+        <h2>Lobby Chat</h2>
+        <% if (!locals.userId) { %>
+          <p class="chat-notice">You can view the chat, but need to <a href="/auth/login">login</a> to participate.</p>
+        <% } %>
+        <ul id="lobby-chat-messages" class="chat-messages-list">
+        </ul>
+        <form id="lobby-message-form" class="chat-form">
+            <input type="text" id="lobby-message-input" placeholder="Type your message..." autocomplete="off" required />
+            <button type="submit">Send</button>
+        </form>
+      </div>
+    </div>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script type="module" src="/js/lobby.js"></script>
+    <script src="/js/lobby.js"></script>
   </body>
 </html>
