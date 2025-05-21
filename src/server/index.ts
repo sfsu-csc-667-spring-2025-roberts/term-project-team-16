@@ -57,7 +57,23 @@ app.set("view engine", "ejs");
 // Routes setup
 app.use("/", rootRoutes);
 app.use("/auth", authRoutes);
-app.use("/api/games", gameRoutes); // Your game routes
+app.use("/games", gameRoutes); // Your game routes
+
+// 404 handler
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const err = new Error("Not Found");
+  (err as any).status = 404;
+  next(err);
+});
+
+// error handler
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  res.status(err.status || 500);
+  res.render("error", {
+    message: err.message,
+    error: process.env.NODE_ENV !== "production" ? err : {}
+  });
+});
 
 const PORT = process.env.PORT || 3000;
 
@@ -79,6 +95,7 @@ declare module 'express-session' {
   interface SessionData {
     userId?: number;
     username?: string;
+    email?: string;
     returnTo?: string; // For redirecting after login
     // Add any other custom session properties here
   }

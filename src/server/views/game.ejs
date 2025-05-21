@@ -1,16 +1,66 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <title>Game</title>
-  </head>
-  <body>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>BS Card Game</title>
+    <link rel="stylesheet" href="/css/game.css">
+</head>
+<body>
     <%- include("shared/header") %>
 
     <div class="game-container">
-      <div class="card placeholder">🂡</div>
-      <div class="card placeholder">🂱</div>
+        <div class="game-info">
+            <div id="game-status"><!-- Show messages --></div>
+            <div id="pile-info">
+                <span>Pile:</span>
+                <span id="pile-count">0 cards</span>
+            </div>
+            <div id="current-declaration">
+                <span>Current declaration:</span>
+                <span id="declared-rank">Aces</span>
+            </div>
+        </div>
+
+        <div class="player-hand-section">
+            <h3>Your Hand</h3>
+            <div id="player-hand" class="hand-cards">
+                <!-- Cards will be inserted here -->
+            </div>
+        </div>
+
+        <div class="action-section">
+            <form id="play-form" autocomplete="off">
+                <label for="selected-cards">Select cards to play:</label>
+                <div id="selectable-hand" class="hand-cards">
+                    <!-- Selectable cards -->
+                </div>
+                <label for="declared-rank-select">Declare as:</label>
+                <select id="declared-rank-select" required>
+                    <option value="A">Aces</option>
+                    <option value="2">Twos</option>
+                    <option value="3">Threes</option>
+                    <option value="4">Fours</option>
+                    <option value="5">Fives</option>
+                    <option value="6">Sixes</option>
+                    <option value="7">Sevens</option>
+                    <option value="8">Eights</option>
+                    <option value="9">Nines</option>
+                    <option value="10">Tens</option>
+                    <option value="J">Jacks</option>
+                    <option value="Q">Queens</option>
+                    <option value="K">Kings</option>
+                </select>
+                <button class="btn primary" type="submit">Play Selected Cards</button>
+            </form>
+
+            <button class="btn bs" id="call-bs-btn">Call BS!</button>
+        </div>
+
+        <div id="game-log" class="game-log">
+            <!-- Game log messages -->
+        </div>
     </div>
 
     <script type="module" src="/js/game.js"></script>
-  </body>
+</body>
 </html>

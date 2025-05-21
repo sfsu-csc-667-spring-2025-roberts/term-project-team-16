@@ -4,14 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Error</title>
-    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/error.css">
 </head>
 <body>
-    <h1><%= message %></h1>
-    <h2><%= error.status %></h2>
-    <% if (error.stack) { %>
-      <pre><%= error.stack %></pre>
-    <% } %>
-    <a href="/">Go to Homepage</a>
+    <div class="error-container">
+        <div class="error-title"><%= message %></div>
+        <div class="error-status">Error <%= error.status %></div>
+        <a href="/">Go to Homepage</a>
+    </div>
 </body>
 </html>

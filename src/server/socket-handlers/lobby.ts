@@ -101,90 +101,92 @@ export default function handleLobbyConnection(socket: Socket): void {
 
     // Game management
     socket.on('game:create', async (data, callback) => {
-        try {
-            const userId = (socket as any).userId;
-            const username = (socket as any).username;
+    try {
+        const userId = (socket as any).userId;
+        const username = (socket as any).username;
 
-            if (!userId || !username) {
-                callback?.({ error: 'Not authenticated' });
-                return;
-            }
-
-            // Create new game in database
-            const result = await pool.query(
-                `INSERT INTO games (creator_id, created_at, status)
-                 VALUES ($1, NOW(), 'waiting')
-                 RETURNING game_id`,
-                [userId]
-            );
-
-            const gameId = result.rows[0].game_id;
-
-            // Add creator as first player
-            await pool.query(
-                `INSERT INTO game_players (game_id, user_id, joined_at)
-                 VALUES ($1, $2, NOW())`,
-                [gameId, userId]
-            );
-
-            // Track game in memory
-            activeGames.set(gameId, {
-                id: gameId,
-                players: [username],
-                started: false,
-                createdAt: new Date()
-            });
-
-            // Broadcast updated game list
-            socket.broadcast.emit('games:list', Array.from(activeGames.values()));
-            
-            callback?.({ gameId });
-        } catch (error) {
-            console.error('Error creating game:', error);
-            callback?.({ error: 'Failed to create game' });
+        if (!userId || !username) {
+            callback?.({ error: 'Not authenticated' });
+            return;
         }
-    });
 
-    socket.on('game:join', async ({ gameId }, callback) => {
-        try {
-            const userId = (socket as any).userId;
-            const username = (socket as any).username;
+        // Create new game in database (4 players max, 1 current, state 'waiting')
+        const result = await pool.query(
+            `INSERT INTO game (max_num_players, current_num_players, state)
+             VALUES ($1, $2, $3)
+             RETURNING game_id`,
+            [4, 1, 'waiting']
+        );
 
-            if (!userId || !username) {
-                callback?.({ error: 'Not authenticated' });
-                return;
-            }
+        const gameId = result.rows[0].game_id;
 
-            const game = activeGames.get(gameId);
-            if (!game) {
-                callback?.({ error: 'Game not found' });
-                return;
-            }
+        // Add creator as first player, position 0
+        await pool.query(
+            `INSERT INTO game_players (game_id, user_id, position)
+             VALUES ($1, $2, $3)`,
+            [gameId, userId, 0]
+        );
 
-            if (game.players.length >= 4 || game.started) {
-                callback?.({ error: 'Game is full or already started' });
-                return;
-            }
+        // Optionally update activeGames
+        activeGames.set(gameId, {
+            id: gameId,
+            players: [username],
+            started: false,
+            createdAt: new Date()
+        });
 
-            // Add player to game in database
-            await pool.query(
-                `INSERT INTO game_players (game_id, user_id, joined_at)
-                 VALUES ($1, $2, NOW())`,
-                [gameId, userId]
-            );
+        socket.broadcast.emit('games:list', Array.from(activeGames.values()));
+        callback?.({ gameId });
+    } catch (error) {
+        console.error('Error creating game:', error);
+        callback?.({ error: 'Failed to create game' });
+    }
+});
 
-            // Update game state
-            game.players.push(username);
-            activeGames.set(gameId, game);
+socket.on('game:join', async ({ gameId }, callback) => {
+    try {
+        const userId = (socket as any).userId;
+        const username = (socket as any).username;
 
-            // Broadcast updated game list
-            socket.broadcast.emit('games:list', Array.from(activeGames.values()));
-            
-            callback?.({ success: true });
-        } catch (error) {
-            console.error('Error joining game:', error);
-            callback?.({ error: 'Failed to join game' });
+        if (!userId || !username) {
+            callback?.({ error: 'Not authenticated' });
+            return;
         }
+
+        const game = activeGames.get(gameId);
+        if (!game) {
+            callback?.({ error: 'Game not found' });
+            return;
+        }
+
+        if (game.players.length >= 4 || game.started) {
+            callback?.({ error: 'Game is full or already started' });
+            return;
+        }
+
+        // Add player to game in database
+        await pool.query(
+            `INSERT INTO game_players (game_id, user_id, position)
+             VALUES ($1, $2, $3)`,
+            [gameId, userId, game.players.length]
+        );
+
+        // Update player count in game table
+        await pool.query(
+            `UPDATE game SET current_num_players = current_num_players + 1 WHERE game_id = $1`,
+            [gameId]
+        );
+
+        // Update in-memory game
+        game.players.push(username);
+        activeGames.set(gameId, game);
+
+        socket.broadcast.emit('games:list', Array.from(activeGames.values()));
+        callback?.({ success: true });
+    } catch (error) {
+        console.error('Error joining game:', error);
+        callback?.({ error: 'Failed to join game' });
+    }
     });
 
     socket.on('games:list', (callback) => {

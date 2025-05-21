@@ -1,5 +1,4 @@
-import express from "express";
-import { Request, Response } from "express";
+import express, { Request, Response, NextFunction } from "express";
 import { Session } from "express-session";
 import { RequestHandler } from "express-serve-static-core";
 import { QueryResult } from "pg";
@@ -7,6 +6,7 @@ import pool from "../../config/database";
 
 interface CustomSession extends Session {
     userId?: number;
+    username?: string;
 }
 
 interface RequestWithSession extends Request {
@@ -15,8 +15,9 @@ interface RequestWithSession extends Request {
 
 interface Game {
     game_id: number;
-    created_at: Date;
-    started_at: Date | null;
+    max_num_players: number;
+    current_num_players: number;
+    state: string;
     players: Player[];
 }
 
@@ -27,39 +28,37 @@ interface Player {
 
 const router = express.Router();
 
-// Get list of active games
+// GET: List all active games (lobby)
 const listGames: RequestHandler = async (req, res, next) => {
     try {
         const page = parseInt(req.query.page as string) || 1;
         const limit = parseInt(req.query.limit as string) || 10;
         const offset = (page - 1) * limit;
 
-        // Get total count of games
+        // Get total count of active games (waiting to start)
         const countResult = await pool.query(
-            `SELECT COUNT(*) 
-            FROM games g 
-            WHERE g.started_at IS NULL`
+            `SELECT COUNT(*) FROM game WHERE state = 'waiting'`
         );
         const totalGames = parseInt(countResult.rows[0].count);
-        const totalPages = Math.ceil(totalGames / limit);
+        const totalPages = Math.max(1, Math.ceil(totalGames / limit));
 
-        // Get paginated games with players
+        // Get paginated games with players (matching schema)
         const result: QueryResult<Game> = await pool.query(
-            `SELECT g.*, 
+            `SELECT g.*,
                 COALESCE(json_agg(
-                    CASE WHEN u.user_id IS NOT NULL 
+                    CASE WHEN u.user_id IS NOT NULL
                     THEN json_build_object(
                         'user_id', u.user_id,
                         'username', u.username
                     )
                     END
                 ) FILTER (WHERE u.user_id IS NOT NULL), '[]') as players
-            FROM games g
+            FROM game g
             LEFT JOIN game_players gp ON g.game_id = gp.game_id
             LEFT JOIN "user" u ON gp.user_id = u.user_id
-            WHERE g.started_at IS NULL
+            WHERE g.state = 'waiting'
             GROUP BY g.game_id
-            ORDER BY g.created_at DESC
+            ORDER BY g.game_id DESC
             LIMIT $1 OFFSET $2`,
             [limit, offset]
         );
@@ -71,15 +70,35 @@ const listGames: RequestHandler = async (req, res, next) => {
                 totalPages,
                 totalGames,
                 hasNextPage: page < totalPages,
-                hasPrevPage: page > 1
-            }
+                hasPrevPage: page > 1,
+            },
         });
     } catch (error) {
         next(error);
     }
 };
 
-// Start game
+// GET: Render the game page for a specific game
+router.get("/:gameId", async (req: RequestWithSession, res: Response, next: NextFunction) => {
+    try {
+        const { gameId } = req.params;
+        const userId = req.session.userId;
+        const username = req.session.username;
+
+        if (!userId) {
+            return res.redirect("/auth/login");
+        }
+
+        res.render("game", {
+            gameId,
+            username,
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// POST: Start a game
 const startGame: RequestHandler = async (req, res, next) => {
     const gameId = req.params.gameId;
     const userId = (req as RequestWithSession).session.userId;
@@ -90,7 +109,7 @@ const startGame: RequestHandler = async (req, res, next) => {
     }
 
     try {
-        // Check if user is in the game
+        // Make sure user is a player in the game
         const playerCheck = await pool.query(
             "SELECT * FROM game_players WHERE game_id = $1 AND user_id = $2",
             [gameId, userId]
@@ -101,9 +120,9 @@ const startGame: RequestHandler = async (req, res, next) => {
             return;
         }
 
-        // Start the game
+        // Start the game (change state to 'playing')
         await pool.query(
-            "UPDATE games SET started_at = NOW() WHERE game_id = $1 AND started_at IS NULL",
+            "UPDATE game SET state = 'playing' WHERE game_id = $1 AND state = 'waiting'",
             [gameId]
         );
 
@@ -113,7 +132,7 @@ const startGame: RequestHandler = async (req, res, next) => {
     }
 };
 
-// Join game
+// POST: Join a game
 const joinGame: RequestHandler = async (req, res, next) => {
     const gameId = req.params.gameId;
     const userId = (req as RequestWithSession).session.userId;
@@ -124,9 +143,9 @@ const joinGame: RequestHandler = async (req, res, next) => {
     }
 
     try {
-        // Check if game exists and hasn't started
+        // Check if game exists and is waiting
         const gameCheck = await pool.query(
-            "SELECT * FROM games WHERE game_id = $1 AND started_at IS NULL",
+            "SELECT * FROM game WHERE game_id = $1 AND state = 'waiting'",
             [gameId]
         );
 
@@ -146,10 +165,23 @@ const joinGame: RequestHandler = async (req, res, next) => {
             return;
         }
 
-        // Join the game
+        // Get next position for the player (0-based)
+        const positionResult = await pool.query(
+            "SELECT COUNT(*) FROM game_players WHERE game_id = $1",
+            [gameId]
+        );
+        const nextPosition = parseInt(positionResult.rows[0].count, 10);
+
+        // Join the game (add to players table)
         await pool.query(
-            "INSERT INTO game_players (game_id, user_id) VALUES ($1, $2)",
-            [gameId, userId]
+            "INSERT INTO game_players (game_id, user_id, position) VALUES ($1, $2, $3)",
+            [gameId, userId, nextPosition]
+        );
+
+        // Update player count
+        await pool.query(
+            "UPDATE game SET current_num_players = current_num_players + 1 WHERE game_id = $1",
+            [gameId]
         );
 
         res.json({ message: "Joined game successfully" });
@@ -158,7 +190,7 @@ const joinGame: RequestHandler = async (req, res, next) => {
     }
 };
 
-// Create new game
+// POST: Create a new game
 const createGame: RequestHandler = async (req, res, next) => {
     const userId = (req as RequestWithSession).session.userId;
 
@@ -168,20 +200,21 @@ const createGame: RequestHandler = async (req, res, next) => {
     }
 
     try {
-        // Create new game
+        // Create new game, set yourself as the first player
         const result = await pool.query(
-            `INSERT INTO games (created_at) 
-             VALUES (NOW()) 
-             RETURNING game_id`
+            `INSERT INTO game (max_num_players, current_num_players, state) 
+             VALUES ($1, $2, $3)
+             RETURNING game_id`,
+            [4, 1, 'waiting'] // Default max players to 4, current to 1
         );
         
         const gameId = result.rows[0].game_id;
 
-        // Add creator as first player
+        // Add creator as first player, position 0
         await pool.query(
-            `INSERT INTO game_players (game_id, user_id) 
-             VALUES ($1, $2)`,
-            [gameId, userId]
+            `INSERT INTO game_players (game_id, user_id, position) 
+             VALUES ($1, $2, $3)`,
+            [gameId, userId, 0]
         );
 
         res.json({ id: gameId });

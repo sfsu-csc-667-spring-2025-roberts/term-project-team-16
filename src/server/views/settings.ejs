@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Account Settings</title>
+    <link rel="stylesheet" href="/css/settings.css">
+</head>
+<body>
+    <div class="settings-container">
+        <form class="settings-form" id="settingsForm" action="/settings" method="POST" autocomplete="off">
+            <div class="settings-title">Account Settings</div>
+
+            <% if (typeof error !== 'undefined' && error) { %>
+                <div class="settings-error"><%= error %></div>
+            <% } %>
+            <% if (typeof message !== 'undefined' && message) { %>
+                <div class="settings-message"><%= message %></div>
+            <% } %>
+
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" value="<%= typeof username !== 'undefined' ? username : '' %>" required>
+
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" value="<%= typeof email !== 'undefined' ? email : '' %>" required>
+
+            <label for="password">New Password</label>
+            <input type="password" id="password" name="password" placeholder="Leave blank to keep current password">
+
+            <button class="btn primary" type="button" id="saveBtn">Save Changes</button>
+        </form>
+
+        <form class="delete-form" id="deleteForm" action="/settings/delete" method="POST">
+            <button class="btn delete" type="button" id="deleteBtn">Delete Account</button>
+        </form>
+    </div>
+
+    <div class="modal" id="modal" style="display:none;">
+        <div class="modal-content">
+            <form id="modalForm" autocomplete="off">
+                <div id="modalPrompt" style="margin-bottom:1rem;">Enter your current password:</div>
+                <input type="password" id="modal-password" name="currentPassword" required autocomplete="current-password">
+                <div style="display: flex; gap: 1rem; margin-top: 1.5rem; justify-content: flex-end;">
+                    <button type="button" id="modalCancel" class="btn delete">Cancel</button>
+                    <button type="submit" id="modalConfirm" class="btn primary">OK</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const saveBtn = document.getElementById('saveBtn');
+        const deleteBtn = document.getElementById('deleteBtn');
+        const modal = document.getElementById('modal');
+        const modalForm = document.getElementById('modalForm');
+        const modalPassword = document.getElementById('modal-password');
+        const modalPrompt = document.getElementById('modalPrompt');
+        const modalCancel = document.getElementById('modalCancel');
+        const settingsForm = document.getElementById('settingsForm');
+        const deleteForm = document.getElementById('deleteForm');
+
+        let mode = 'save';
+
+        saveBtn.addEventListener('click', function() {
+            mode = 'save';
+            modalPrompt.textContent = "Enter your current password to save changes:";
+            modalPassword.value = "";
+            modal.style.display = 'flex';
+            modalPassword.focus();
+        });
+
+        deleteBtn.addEventListener('click', function() {
+            mode = 'delete';
+            modalPrompt.textContent = "Enter your current password to delete your account:";
+            modalPassword.value = "";
+            modal.style.display = 'flex';
+            modalPassword.focus();
+        });
+
+        modalCancel.addEventListener('click', function() {
+            modal.style.display = 'none';
+        });
+
+        modalForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            if (mode === 'save') {
+                let pwInput = document.createElement('input');
+                pwInput.type = 'hidden';
+                pwInput.name = 'currentPassword';
+                pwInput.value = modalPassword.value;
+                settingsForm.appendChild(pwInput);
+                settingsForm.submit();
+            } else if (mode === 'delete') {
+                let pwInput = document.createElement('input');
+                pwInput.type = 'hidden';
+                pwInput.name = 'currentPassword';
+                pwInput.value = modalPassword.value;
+                deleteForm.appendChild(pwInput);
+                deleteForm.submit();
+            }
+            modal.style.display = 'none';
+        });
+    </script>
+</body>
+</html>
