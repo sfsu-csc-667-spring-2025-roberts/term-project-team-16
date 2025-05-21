@@ -4,26 +4,28 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login</title>
-    <link rel="stylesheet" href="/css/style.css"> </head>
+    <link rel="stylesheet" href="/css/main.css">
+    <link rel="stylesheet" href="/css/auth.css">
+</head>
 <body>
-    <h1>Login</h1>
-    <% if (typeof error !== 'undefined' && error) { %>
-        <p style="color: red;"><%= error %></p>
-    <% } %>
-    <% if (typeof message !== 'undefined' && message) { %>
-        <p style="color: green;"><%= message %></p>
-    <% } %>
-    <form action="/auth/login" method="POST">
-        <div>
-            <label for="usernameOrEmail">Username or Email:</label>
-            <input type="text" id="usernameOrEmail" name="usernameOrEmail" required>
-        </div>
-        <div>
-            <label for="password">Password:</label>
-            <input type="password" id="password" name="password" required>
-        </div>
-        <button type="submit">Login</button>
-    </form>
-    <p>Don't have an account? <a href="/auth/register">Register here</a>.</p>
+    <div class="auth-container">
+        <form class="auth-form" action="/auth/login" method="POST">
+            <div class="auth-title">Sign in to your account</div>
+            <% if (typeof error !== 'undefined' && error) { %>
+                <div class="auth-error"><%= error %></div>
+            <% } %>
+            <label for="usernameOrEmail">Username or Email</label>
+            <input type="text" id="usernameOrEmail" name="usernameOrEmail" required autocomplete="username">
+
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required autocomplete="current-password">
+
+            <button class="auth-btn" type="submit">Login</button>
+            <div class="auth-alt">
+                Don't have an account?
+                <a href="/auth/register">Register here</a>
+            </div>
+        </form>
+    </div>
 </body>
 </html>

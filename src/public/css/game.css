@@ -1,0 +1,141 @@
+html, body {
+    background: #191c1f;
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+}
+
+.game-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    justify-content: flex-start;
+    padding-top: 2.5rem;
+}
+
+.game-info {
+    background: #23272e;
+    color: #fff;
+    border-radius: 10px;
+    padding: 1.2rem 2rem;
+    margin-bottom: 1.5rem;
+    min-width: 320px;
+    text-align: center;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.10);
+}
+
+#game-status {
+    font-size: 1.2rem;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+}
+
+#pile-info, #current-declaration {
+    margin-bottom: 0.2rem;
+}
+
+.player-hand-section {
+    width: 100%;
+    max-width: 540px;
+    margin-bottom: 1.8rem;
+}
+
+.hand-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    justify-content: center;
+    margin-top: 0.5rem;
+}
+
+.hand-cards .card {
+    background: #222428;
+    color: #fff;
+    font-size: 2.2rem;
+    border-radius: 8px;
+    border: 2px solid #4c8cff;
+    padding: 1rem 0.8rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.14);
+    transition: transform 0.15s, box-shadow 0.15s;
+    cursor: pointer;
+}
+
+.hand-cards .card.selected {
+    border: 2px solid #f53d3d;
+    background: #27252f;
+    transform: translateY(-8px) scale(1.05);
+}
+
+.action-section {
+    background: #23272e;
+    padding: 1.2rem 2rem;
+    border-radius: 10px;
+    margin-bottom: 1.8rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.2rem;
+}
+
+#declared-rank-select {
+    margin-left: 0.7rem;
+    padding: 0.3rem 1rem;
+    border-radius: 6px;
+    font-size: 1rem;
+    border: 1px solid #444;
+    background: #191c1f;
+    color: #fff;
+}
+
+.btn {
+    font-size: 1rem;
+    font-weight: 700;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    padding: 0.7rem 1.6rem;
+    margin-top: 1rem;
+    transition: background 0.2s;
+    letter-spacing: 1px;
+}
+
+.btn.primary {
+    background: #007bff;
+    color: #fff;
+}
+
+.btn.primary:hover {
+    background: #0056b3;
+}
+
+.btn.bs {
+    background: #f53d3d;
+    color: #fff;
+}
+
+.btn.bs:hover {
+    background: #b01c1c;
+}
+
+.game-log {
+    background: #23272e;
+    color: #aaa;
+    font-size: 1rem;
+    border-radius: 8px;
+    padding: 1rem 2rem;
+    min-width: 360px;
+    min-height: 64px;
+    max-width: 600px;
+    margin: 0 auto 1.5rem auto;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.11);
+    overflow-y: auto;
+}
+
+@media (max-width: 600px) {
+    .game-info, .action-section, .game-log, .player-hand-section {
+        min-width: unset;
+        max-width: 97vw;
+        padding: 1.1rem 0.4rem;
+    }
+}

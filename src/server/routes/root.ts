@@ -26,6 +26,14 @@ router.post("/test-socket", (req: Request, res: Response): void => {
   res.status(200).send("Socket test message sent.");
 });
 
-// Chat is now handled through WebSocket events directly
+router.get("/settings", (req: Request, res: Response) => {
+  if (!req.session?.userId) {
+    return res.redirect("/auth/login");
+  }
+  res.render("settings", { 
+    username: req.session.username,
+    email: req.session.email
+  });
+});
 
 export default router;
