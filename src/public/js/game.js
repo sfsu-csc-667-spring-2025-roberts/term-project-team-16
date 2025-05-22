@@ -117,7 +117,6 @@ socket.on('connect', () => {
             return;
         }
         console.log('Successfully joined game room');
-        
         // Load message history for this game
         socket.emit('game:loadMessages', { gameId }, (response) => {
             if (response?.error) {
@@ -125,6 +124,8 @@ socket.on('connect', () => {
                 handleConnectionError('Failed to load message history');
             }
         });
+        // Request latest game state after joining
+        socket.emit('game:getState', { gameId }, () => {});
     });
 });
 
@@ -169,11 +170,7 @@ playForm?.addEventListener('submit', async (e) => {
             if (gameStatus) gameStatus.textContent = response.error;
             return;
         }
-        // Remove played cards from hand
-        currentHand = currentHand.filter(card => 
-            !selectedCards.some(played => played.card_id === card.card_id)
-        );
-        renderPlayerHand(currentHand);
+        // Do not update hand here; wait for backend events to update hand
     });
 });
 
@@ -298,13 +295,24 @@ socket.on('game:bsResult', ({ callingPlayer, calledPlayer, wasBluffing, cards })
 
 // Handle game state
 socket.on('game:state', (data) => {
-    // Update game state
-    isGameStarted = data.gameState.state === 'playing';
-    playerPosition = data.yourPosition;
-    totalPlayers = data.players.length;
-    currentHand = data.hand;
-
-    // Update UI
+    // Always update game state from backend
+    if (typeof data.isGameStarted !== 'undefined') {
+        isGameStarted = data.isGameStarted;
+    } else if (data.gameState) {
+        isGameStarted = data.gameState.state === 'playing';
+    }
+    if (typeof data.playerPosition !== 'undefined') {
+        playerPosition = data.playerPosition;
+    } else if (typeof data.yourPosition !== 'undefined') {
+        playerPosition = data.yourPosition;
+    }
+    if (data.players) {
+        totalPlayers = data.players.length;
+    }
+    if (data.hand) {
+        currentHand = data.hand;
+        renderPlayerHand(currentHand);
+    }
     if (startGameBtn) {
         if (isGameStarted) {
             startGameBtn.style.display = 'none';
@@ -313,25 +321,29 @@ socket.on('game:state', (data) => {
             startGameBtn.disabled = false;
         }
     }
-
     if (gameStatus) {
         if (!isGameStarted) {
             gameStatus.textContent = 'Waiting for game to start...';
-        } else {
+        } else if (typeof data.currentTurn !== 'undefined') {
             updateTurnState(data.currentTurn);
         }
     }
-
-    // Update player hand
-    renderPlayerHand(data.hand);
-
     // Update declared rank if there was a last play
     if (data.lastPlay && declaredRank) {
         declaredRank.textContent = data.lastPlay.declaredRank;
     }
-
     // Update player info in UI
-    updatePlayerList(data.players);
+    if (data.players) {
+        updatePlayerList(data.players);
+    }
+});
+
+// After every play or BS, request the latest state if not already handled
+socket.on('game:cardPlayed', () => {
+    socket.emit('game:getState', { gameId }, () => {});
+});
+socket.on('game:bsResult', () => {
+    socket.emit('game:getState', { gameId }, () => {});
 });
 
 // Function to update player list display

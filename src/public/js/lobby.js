@@ -319,10 +319,23 @@ socket.on('game:stateChanged', (data) => {
     }
 });
 
+// Handle new game created event
+socket.on('game:created', (data) => {
+    // Refresh games list when a new game is created
+    fetchGames(gameState.currentPage);
+});
+
+// Handle game joined event
+socket.on('game:joined', (data) => {
+    // Refresh games list when someone joins a game
+    fetchGames(gameState.currentPage);
+});
+
+// Handle game deleted/ended event
+socket.on('game:ended', (data) => {
+    // Refresh games list when a game ends
+    fetchGames(gameState.currentPage);
+});
+
 // Initial fetch of games
 fetchGames();
-
-// Refresh games list periodically
-setInterval(() => {
-    fetchGames(gameState.currentPage);
-}, 30000); // Refresh every 30 seconds

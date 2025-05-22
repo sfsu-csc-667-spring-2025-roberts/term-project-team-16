@@ -180,5 +180,260 @@ export default function handleGameConnection(socket: Socket): void {
         }
     });
 
+    // Start game event
+    socket.on('game:start', async ({ gameId }, callback) => {
+        try {
+            const userId = (socket as any).userId;
+            if (!userId) {
+                callback?.({ error: 'Not authenticated' });
+                return;
+            }
+
+            // Check if game is in 'playing' state already
+            const gameRes = await pool.query('SELECT state FROM game WHERE game_id = $1', [gameId]);
+            if (!gameRes.rows.length || gameRes.rows[0].state !== 'playing') {
+                callback?.({ error: 'Game is not ready to start (must be in playing state)'});
+                return;
+            }
+
+            // Get all players in the game
+            const playersRes = await pool.query(
+                `SELECT gp.game_player_id, gp.position, u.user_id, u.username
+                 FROM game_players gp
+                 JOIN "user" u ON gp.user_id = u.user_id
+                 WHERE gp.game_id = $1
+                 ORDER BY gp.position`,
+                [gameId]
+            );
+            const players = playersRes.rows;
+            if (players.length < 2) {
+                callback?.({ error: 'Need at least 2 players to start.' });
+                return;
+            }
+
+            // Deal cards (simple shuffle and assign)
+            // Get all cards
+            const cardsRes = await pool.query('SELECT * FROM card');
+            let cards = cardsRes.rows;
+            // Shuffle
+            cards = cards.sort(() => Math.random() - 0.5);
+            // Remove old hands
+            await pool.query(
+                `DELETE FROM cards_held WHERE game_player_id IN (
+                    SELECT game_player_id FROM game_players WHERE game_id = $1
+                )`,
+                [gameId]
+            );
+            // Assign cards round-robin
+            for (let i = 0; i < cards.length; i++) {
+                const player = players[i % players.length];
+                await pool.query(
+                    'INSERT INTO cards_held (game_player_id, card_id) VALUES ($1, $2)',
+                    [player.game_player_id, cards[i].card_id]
+                );
+            }
+
+            // Set up initial turn and state
+            gameStates.set(gameId, {
+                currentTurn: 0,
+                lastPlay: null
+            });
+
+            // Send each player their hand and info
+            for (const player of players) {
+                // Get hand for this player
+                const handRes = await pool.query(
+                    `SELECT c.* FROM cards_held ch JOIN card c ON ch.card_id = c.card_id WHERE ch.game_player_id = $1`,
+                    [player.game_player_id]
+                );
+                // Emit to this player's socket(s)
+                socket.to(`user:${player.user_id}`).emit('game:started', {
+                    playerPosition: player.position,
+                    totalPlayers: players.length,
+                    hand: handRes.rows
+                });
+                // If this is the current user, emit directly
+                if ((socket as any).userId === player.user_id) {
+                    socket.emit('game:started', {
+                        playerPosition: player.position,
+                        totalPlayers: players.length,
+                        hand: handRes.rows
+                    });
+                }
+            }
+
+            callback?.({ success: true });
+        } catch (error) {
+            console.error('Error starting game:', error);
+            callback?.({ error: 'Failed to start game' });
+        }
+    });
+
+    // Play cards event
+    socket.on('game:playCards', async ({ gameId, cards, declaredRank }, callback) => {
+        try {
+            const userId = (socket as any).userId;
+            if (!userId) {
+                callback?.({ error: 'Not authenticated' });
+                return;
+            }
+            // Get player info
+            const playerRes = await pool.query(
+                `SELECT gp.game_player_id, gp.position FROM game_players gp WHERE gp.game_id = $1 AND gp.user_id = $2`,
+                [gameId, userId]
+            );
+            if (!playerRes.rows.length) {
+                callback?.({ error: 'Not a player in this game' });
+                return;
+            }
+            const player = playerRes.rows[0];
+            // Remove played cards from player's hand
+            for (const card of cards) {
+                await pool.query(
+                    'DELETE FROM cards_held WHERE game_player_id = $1 AND card_id = $2',
+                    [player.game_player_id, card.card_id]
+                );
+            }
+            // Update last play in memory
+            const state = gameStates.get(gameId) || { currentTurn: 0, lastPlay: null };
+            state.lastPlay = {
+                playerId: player.position,
+                cards,
+                declaredRank
+            };
+            // Advance turn
+            const playersRes = await pool.query('SELECT COUNT(*) FROM game_players WHERE game_id = $1', [gameId]);
+            const totalPlayers = parseInt(playersRes.rows[0].count, 10);
+            state.currentTurn = (state.currentTurn + 1) % totalPlayers;
+            gameStates.set(gameId, state);
+
+            // Get updated game state including hands
+            const updatedState = await getGameState(gameId);
+            if (!updatedState) {
+                callback?.({ error: 'Failed to get updated game state' });
+                return;
+            }
+
+            // Get the player's updated hand
+            const handRes = await pool.query(
+                `SELECT c.* 
+                 FROM cards_held ch
+                 JOIN game_players gp ON ch.game_player_id = gp.game_player_id
+                 JOIN card c ON ch.card_id = c.card_id
+                 WHERE gp.game_id = $1 AND gp.user_id = $2`,
+                [gameId, userId]
+            );
+
+            // First emit the play event
+            socket.to(`game:${gameId}`).emit('game:cardPlayed', {
+                playerPosition: player.position,
+                cardCount: cards.length,
+                declaredRank,
+                nextTurn: state.currentTurn
+            });
+            socket.emit('game:cardPlayed', {
+                playerPosition: player.position,
+                cardCount: cards.length,
+                declaredRank,
+                nextTurn: state.currentTurn
+            });
+
+            // Then emit updated state to all players
+            socket.to(`game:${gameId}`).emit('game:state', {
+                ...updatedState,
+                hand: [] // Other players get empty hand
+            });
+            // Current player gets their updated hand
+            socket.emit('game:state', {
+                ...updatedState,
+                hand: handRes.rows,
+                yourPosition: player.position
+            });
+
+            callback?.({ success: true });
+        } catch (error) {
+            console.error('Error playing cards:', error);
+            callback?.({ error: 'Failed to play cards' });
+        }
+    });
+
+    // Get updated hand event
+    socket.on('game:getUpdatedHand', async ({ gameId }, callback) => {
+        try {
+            const userId = (socket as any).userId;
+            if (!userId) {
+                callback?.({ error: 'Not authenticated' });
+                return;
+            }
+            // Get player's game_player_id
+            const playerRes = await pool.query(
+                `SELECT gp.game_player_id FROM game_players gp WHERE gp.game_id = $1 AND gp.user_id = $2`,
+                [gameId, userId]
+            );
+            if (!playerRes.rows.length) {
+                callback?.({ error: 'Not a player in this game' });
+                return;
+            }
+            const gamePlayerId = playerRes.rows[0].game_player_id;
+            // Get hand
+            const handRes = await pool.query(
+                `SELECT c.* FROM cards_held ch JOIN card c ON ch.card_id = c.card_id WHERE ch.game_player_id = $1`,
+                [gamePlayerId]
+            );
+            socket.emit('game:state', {
+                hand: handRes.rows
+            });
+            callback?.({ success: true });
+        } catch (error) {
+            console.error('Error getting updated hand:', error);
+            callback?.({ error: 'Failed to get updated hand' });
+        }
+    });
+
+    // Placeholder for Call BS event (to be implemented with full logic)
+    socket.on('game:callBS', async ({ gameId }, callback) => {
+        // TODO: Implement BS logic (check last play, reveal cards, assign pile, update hands, etc.)
+        // For now, just emit a dummy result and update all hands
+        try {
+            // Example: just broadcast a fake result
+            socket.to(`game:${gameId}`).emit('game:bsResult', {
+                callingPlayer: 0,
+                calledPlayer: 1,
+                wasBluffing: false,
+                cards: []
+            });
+            socket.emit('game:bsResult', {
+                callingPlayer: 0,
+                calledPlayer: 1,
+                wasBluffing: false,
+                cards: []
+            });
+            // After BS, emit updated state to all
+            const gameState = await getGameState(gameId);
+            if (gameState) {
+                socket.to(`game:${gameId}`).emit('game:state', gameState);
+                socket.emit('game:state', gameState);
+            }
+            callback?.({ success: true });
+        } catch (error) {
+            callback?.({ error: 'Failed to process BS call' });
+        }
+    });
+
+    // After every play, also emit updated state to all players for UI sync
+    // (Wrap the playCards handler's callback)
+    const origPlayCards = socket.listeners('game:playCards')[0];
+    socket.off('game:playCards', origPlayCards);
+    socket.on('game:playCards', async (data, callback) => {
+        await origPlayCards(data, callback);
+        // After play, emit updated state
+        const gameId = data.gameId;
+        const gameState = await getGameState(gameId);
+        if (gameState) {
+            socket.to(`game:${gameId}`).emit('game:state', gameState);
+            socket.emit('game:state', gameState);
+        }
+    });
+
     // --- Add gameplay logic here later ---
 }
