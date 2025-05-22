@@ -1,5 +1,17 @@
-import type { Socket } from "socket.io";
+import type { Socket as OriginalSocket } from "socket.io"; // Use OriginalSocket to avoid name clash
 import pool from "../config/database";
+// If SessionData is exported from express-session augmentation, you might import it
+// import { SessionData } from 'express-session'; // Or from wherever your SessionData is available
+// import { IncomingMessage } from "http";
+
+// Define an interface for the socket object that includes your custom properties
+interface AugmentedSocket extends OriginalSocket {
+    userId?: number;
+    username?: string;
+    // If you needed to access the session object itself via socket.request
+    // and ensure it's typed correctly after middleware, it would be more complex:
+    // request: IncomingMessage & { session: SessionData & { userId?: number; username?: string; } };
+}
 
 interface ChatMessage {
     content: string;
@@ -10,38 +22,85 @@ interface ChatMessage {
 
 interface Card {
     card_id: number;
-    value: number;
-    shape: string;
+    value: number; // 1 (Ace) to 13 (King)
+    shape: string; // 'hearts', 'diamonds', 'clubs', 'spades'
 }
 
-interface GameState {
-    currentTurn: number;
-    lastPlay: {
-        playerId: number;
-        cards: Card[];
-        declaredRank: string;
-    } | null;
+interface PlayerState {
+    userId: number;
+    username: string;
+    position: number;
+    card_count: number;
+    isCurrentTurn: boolean;
 }
 
-// Track active games state
-const gameStates = new Map<string, GameState>();
+// Details of the last play made in a game
+interface LastPlayInfo {
+    gamePlayerId: number; // game_player_id of the player who made the last play
+    playerPosition: number; // position of the player who made the last play
+    cardsPlayed: Card[]; // Actual cards that were put down
+    declaredRank: string; // The rank declared by the player
+    cardCount: number; // How many cards were declared
+}
 
-async function getGameState(gameId: string) {
-    // Get game status
+interface GameStateForClient {
+    gameId: string;
+    gameState: {
+        state: string; // e.g., 'waiting', 'playing', 'ended'
+        current_num_players: number;
+    };
+    players: PlayerState[];
+    currentTurnPosition: number; // The position of the player whose turn it is
+    lastPlay: LastPlayInfo | null; // Information about the immediately preceding play
+    hand?: Card[]; // Only sent to the specific player
+    yourPosition?: number; // Player's own position
+    pileCardCount: number; // Number of cards in the central pile
+}
+
+// In-memory store for the actual cards in the central pile for each game
+const activeGamePiles = new Map<string, Card[]>(); // gameId -> array of cards in the pile
+
+// In-memory store for the last play information for each game
+const gameLastPlayInfo = new Map<string, LastPlayInfo>(); // gameId -> LastPlayInfo
+
+
+async function getPlayerGamePlayerId(gameId: string, userId: number): Promise<number | null> {
+    const res = await pool.query(
+        `SELECT game_player_id FROM game_players WHERE game_id = $1 AND user_id = $2`,
+        [gameId, userId]
+    );
+    return res.rows.length > 0 ? res.rows[0].game_player_id : null;
+}
+
+async function getPlayerHand(gamePlayerId: number): Promise<Card[]> {
+    const handRes = await pool.query(
+        `SELECT c.card_id, c.value, c.shape 
+         FROM cards_held ch 
+         JOIN card c ON ch.card_id = c.card_id 
+         WHERE ch.game_player_id = $1 
+         ORDER BY c.value, c.shape`, // Consistent hand order
+        [gamePlayerId]
+    );
+    return handRes.rows;
+}
+
+async function fetchFullGameStateForClient(gameId: string, targetUserId?: number): Promise<GameStateForClient | null> {
     const gameResult = await pool.query(
         'SELECT state, current_num_players FROM game WHERE game_id = $1',
         [gameId]
     );
-    
-    if (gameResult.rows.length === 0) {
-        return null;
-    }
+    if (gameResult.rows.length === 0) return null;
+    const gameDbState = gameResult.rows[0];
 
-    // Get all players
+    const turnResult = await pool.query(
+        `SELECT position FROM game_players WHERE game_id = $1 AND is_turn = TRUE`,
+        [gameId]
+    );
+    const currentTurnPosition = turnResult.rows.length > 0 ? turnResult.rows[0].position : -1;
+
     const playersResult = await pool.query(
-        `SELECT gp.position, gp.user_id, u.username,
-         (SELECT COUNT(*) FROM cards_held ch 
-          WHERE ch.game_player_id = gp.game_player_id) as card_count
+        `SELECT gp.user_id, u.username, gp.position, gp.is_turn,
+         (SELECT COUNT(*) FROM cards_held ch WHERE ch.game_player_id = gp.game_player_id) as card_count
          FROM game_players gp
          JOIN "user" u ON gp.user_id = u.user_id
          WHERE gp.game_id = $1
@@ -49,391 +108,425 @@ async function getGameState(gameId: string) {
         [gameId]
     );
 
-    // Get last play if exists
-    const lastPlay = gameStates.get(gameId)?.lastPlay || null;
+    const players: PlayerState[] = playersResult.rows.map(p => ({
+        userId: p.user_id,
+        username: p.username,
+        position: p.position,
+        card_count: parseInt(p.card_count, 10),
+        isCurrentTurn: p.is_turn
+    }));
 
-    return {
-        gameState: gameResult.rows[0],
-        players: playersResult.rows,
-        currentTurn: gameStates.get(gameId)?.currentTurn || 0,
-        lastPlay
+    const pile = activeGamePiles.get(gameId) || [];
+    const lastPlay = gameLastPlayInfo.get(gameId) || null;
+
+    const gameState: GameStateForClient = {
+        gameId,
+        gameState: gameDbState,
+        players,
+        currentTurnPosition,
+        lastPlay,
+        pileCardCount: pile.length,
     };
+
+    if (targetUserId) {
+        const player = players.find(p => p.userId === targetUserId);
+        if (player) {
+            gameState.yourPosition = player.position;
+            const gamePlayerId = await getPlayerGamePlayerId(gameId, targetUserId);
+            if (gamePlayerId) {
+                gameState.hand = await getPlayerHand(gamePlayerId);
+            }
+        }
+    }
+    return gameState;
 }
 
-export default function handleGameConnection(socket: Socket): void {
-    console.log(`[game] socket connected: ${socket.id}`);
+async function broadcastGameState(io: any, gameId: string) {
+    console.log(`[game:${gameId}] Broadcasting game state update.`);
+    const baseGameState = await fetchFullGameStateForClient(gameId); 
+    if (!baseGameState) {
+        console.error(`[game:${gameId}] Failed to fetch base game state for broadcast.`);
+        return;
+    }
 
-    // Join game room when user enters a game
-    socket.on('game:join-room', async ({ gameId }, callback) => {
-        try {
-            const userId = (socket as any).userId;
-            const username = (socket as any).username;
+    for (const player of baseGameState.players) {
+        const specificGameState = await fetchFullGameStateForClient(gameId, player.userId);
+        if (specificGameState) {
+            io.to(`user:${player.userId}`).emit('game:stateUpdate', specificGameState);
+        }
+    }
+}
 
-            if (!userId || !username) {
-                callback?.({ error: 'Not authenticated' });
-                return;
-            }
+async function advanceTurn(gameId: string): Promise<number> {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const currentTurnPlayerResult = await client.query(
+            `SELECT game_player_id, position FROM game_players WHERE game_id = $1 AND is_turn = TRUE`,
+            [gameId]
+        );
 
-            // Join the game-specific room
-            socket.join(`game:${gameId}`);
-            console.log(`User ${username} joined game room ${gameId}`);
-
-            // Get player's cards if they're in the game
-            const cardsResult = await pool.query(
-                `SELECT c.* 
-                 FROM cards_held ch
-                 JOIN game_players gp ON ch.game_player_id = gp.game_player_id
-                 JOIN card c ON ch.card_id = c.card_id
-                 WHERE gp.game_id = $1 AND gp.user_id = $2`,
-                [gameId, userId]
+        let currentPosition = -1;
+        if (currentTurnPlayerResult.rows.length > 0) {
+            currentPosition = currentTurnPlayerResult.rows[0].position;
+            await client.query(
+                `UPDATE game_players SET is_turn = FALSE WHERE game_player_id = $1`,
+                [currentTurnPlayerResult.rows[0].game_player_id]
             );
+        } else {
+            console.warn(`[game:${gameId}] No current turn found when advancing, defaulting. Previous logic might need check.`);
+            currentPosition = -1; 
+        }
 
-            // Get current game state
-            const gameState = await getGameState(gameId);
-            if (!gameState) {
-                callback?.({ error: 'Game not found' });
-                return;
-            }
+        const playerCountResult = await client.query(
+            `SELECT COUNT(*) as count FROM game_players WHERE game_id = $1`,
+            [gameId]
+        );
+        const playerCount = parseInt(playerCountResult.rows[0].count, 10);
+        if (playerCount === 0) {
+            await client.query('ROLLBACK');
+            throw new Error("No players in game, cannot advance turn.");
+        }
 
-            // Send game state to the joining player
-            socket.emit('game:state', {
-                ...gameState,
-                hand: cardsResult.rows,
-                yourPosition: gameState.players.find(p => p.user_id === userId)?.position
-            });
+        const nextPosition = (currentPosition + 1) % playerCount;
+        await client.query(
+            `UPDATE game_players SET is_turn = TRUE WHERE game_id = $1 AND position = $2`,
+            [gameId, nextPosition]
+        );
+        await client.query('COMMIT');
+        console.log(`[game:${gameId}] Advanced turn to player position ${nextPosition}.`);
+        return nextPosition;
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error(`[game:${gameId}] Error advancing turn:`, error);
+        throw error;
+    } finally {
+        client.release();
+    }
+}
 
+// Use the AugmentedSocket type for the socket parameter
+export default function handleGameConnection(io: any, socket: AugmentedSocket): void {
+    console.log(`[game] socket connected: ${socket.id}`);
+    
+    // Access userId and username directly from the augmented socket object
+    // These are attached by the middleware in src/server/config/socket.ts
+    const userId = socket.userId;
+    const username = socket.username;
+
+    socket.on('game:join-room', async ({ gameId }, callback) => {
+        if (!userId || !username) return callback?.({ error: 'Not authenticated (userId or username missing on socket)' });
+        try {
+            socket.join(`game:${gameId}`);
+            socket.join(`user:${userId}`); // Ensure user is in their specific room
+            console.log(`[game:${gameId}] User ${username} (socket ${socket.id}) joined room. User channel: user:${userId}`);
+            
+            const gameState = await fetchFullGameStateForClient(gameId, userId);
+            if (!gameState) return callback?.({ error: 'Game not found' });
+            socket.emit('game:stateUpdate', gameState);
+            await broadcastGameState(io, gameId); 
             callback?.({ success: true });
         } catch (error) {
-            console.error('Error joining game room:', error);
+            console.error(`[game:${gameId}] Error game:join-room for ${username}:`, error);
             callback?.({ error: 'Failed to join game room' });
         }
     });
 
-    // Leave game room
     socket.on('game:leave-room', ({ gameId }, callback) => {
+        if (!userId || !username) return callback?.({ error: 'Not authenticated' });
         socket.leave(`game:${gameId}`);
+        socket.leave(`user:${userId}`); // Also leave user-specific room
+        console.log(`[game:${gameId}] User ${username} (socket ${socket.id}) left room.`);
         callback?.({ success: true });
     });
 
-    // Handle game chat messages
     socket.on('game:sendMessage', async ({ gameId, message }, callback) => {
+        if (!userId || !username) return callback?.({ error: 'Not authenticated' });
+        const trimmedMessage = message.trim();
+        if (!trimmedMessage || trimmedMessage.length > 500) return callback?.({ error: 'Invalid message length' });
         try {
-            const userId = (socket as any).userId;
-            const username = (socket as any).username;
-
-            if (!userId || !username) {
-                callback?.({ error: 'Not authenticated' });
-                return;
-            }
-
-            // Validate message
-            const trimmedMessage = message.trim();
-            if (!trimmedMessage || trimmedMessage.length > 500) {
-                callback?.({ error: 'Invalid message length' });
-                return;
-            }
-
-            // Insert message into database
             const result = await pool.query(
                 `INSERT INTO messages (content, author, game_id, created_at)
-                 VALUES ($1, $2, $3, NOW())
-                 RETURNING created_at`,
+                 VALUES ($1, $2, $3, NOW()) RETURNING created_at`,
                 [trimmedMessage, userId, gameId]
             );
-
-            // Prepare message data
             const messageData: ChatMessage = {
-                content: trimmedMessage,
-                username: username,
-                created_at: result.rows[0].created_at,
-                game_id: gameId
+                content: trimmedMessage, username, created_at: result.rows[0].created_at, game_id: gameId
             };
-
-            // Broadcast to all clients in the game room
-            socket.to(`game:${gameId}`).emit('game:newMessage', messageData);
-            socket.emit('game:newMessage', messageData);
-
+            io.to(`game:${gameId}`).emit('game:newMessage', messageData);
             callback?.({ success: true });
         } catch (error) {
-            console.error('Error handling game message:', error);
+            console.error(`[game:${gameId}] Error game:sendMessage for ${username}:`, error);
             callback?.({ error: 'Failed to send message' });
         }
     });
 
-    // Load game chat history
     socket.on('game:loadMessages', async ({ gameId }, callback) => {
+        if (!userId) return callback?.({ error: 'Not authenticated' });
         try {
             const result = await pool.query(
                 `SELECT m.content, u.username, m.created_at
-                 FROM messages m
-                 JOIN "user" u ON m.author = u.user_id
-                 WHERE m.game_id = $1
-                 ORDER BY m.created_at DESC
-                 LIMIT 20`,
+                 FROM messages m JOIN "user" u ON m.author = u.user_id
+                 WHERE m.game_id = $1 ORDER BY m.created_at DESC LIMIT 50`,
                 [gameId]
             );
             socket.emit('game:loadMessages', result.rows.reverse());
             callback?.({ success: true });
         } catch (error) {
-            console.error('Error loading game message history:', error);
+            console.error(`[game:${gameId}] Error game:loadMessages:`, error);
             callback?.({ error: 'Failed to load message history' });
         }
     });
 
-    // Start game event
     socket.on('game:start', async ({ gameId }, callback) => {
+        if (!userId || !username) return callback?.({ error: 'Not authenticated' });
+        const client = await pool.connect();
         try {
-            const userId = (socket as any).userId;
-            if (!userId) {
-                callback?.({ error: 'Not authenticated' });
-                return;
-            }
+            await client.query('BEGIN');
+            const gameRes = await client.query('SELECT state, current_num_players FROM game WHERE game_id = $1 FOR UPDATE', [gameId]);
+            if (!gameRes.rows.length) throw new Error('Game not found.');
+            if (gameRes.rows[0].state !== 'waiting') throw new Error('Game already started or ended.');
+            if (gameRes.rows[0].current_num_players < 2) throw new Error('Not enough players (min 2).');
 
-            // Check if game is in 'playing' state already
-            const gameRes = await pool.query('SELECT state FROM game WHERE game_id = $1', [gameId]);
-            if (!gameRes.rows.length || gameRes.rows[0].state !== 'playing') {
-                callback?.({ error: 'Game is not ready to start (must be in playing state)'});
-                return;
-            }
-
-            // Get all players in the game
-            const playersRes = await pool.query(
-                `SELECT gp.game_player_id, gp.position, u.user_id, u.username
-                 FROM game_players gp
-                 JOIN "user" u ON gp.user_id = u.user_id
-                 WHERE gp.game_id = $1
-                 ORDER BY gp.position`,
+            await client.query(`UPDATE game SET state = 'playing' WHERE game_id = $1`, [gameId]);
+            const playersRes = await client.query(
+                `SELECT gp.game_player_id, gp.user_id, gp.position 
+                 FROM game_players gp WHERE gp.game_id = $1 ORDER BY gp.position`,
                 [gameId]
             );
             const players = playersRes.rows;
-            if (players.length < 2) {
-                callback?.({ error: 'Need at least 2 players to start.' });
-                return;
-            }
+            if (players.length === 0) throw new Error("No players found in game_players for this game.");
 
-            // Deal cards (simple shuffle and assign)
-            // Get all cards
-            const cardsRes = await pool.query('SELECT * FROM card');
-            let cards = cardsRes.rows;
-            // Shuffle
-            cards = cards.sort(() => Math.random() - 0.5);
-            // Remove old hands
-            await pool.query(
-                `DELETE FROM cards_held WHERE game_player_id IN (
-                    SELECT game_player_id FROM game_players WHERE game_id = $1
-                )`,
-                [gameId]
+            const cardsRes = await client.query('SELECT card_id, value, shape FROM card');
+            let deck: Card[] = cardsRes.rows;
+            deck = deck.sort(() => Math.random() - 0.5); 
+
+            const gamePlayerIds = players.map(p => p.game_player_id);
+            await client.query(`DELETE FROM cards_held WHERE game_player_id = ANY($1::int[])`, [gamePlayerIds]);
+
+            const cardsToDealTotal = 52; 
+            let cardsDealtCount = 0;
+            while(cardsDealtCount < cardsToDealTotal && deck.length > 0) {
+                const playerToReceive = players[cardsDealtCount % players.length];
+                const card = deck.shift(); 
+                if (card) {
+                     await client.query(
+                        'INSERT INTO cards_held (game_player_id, card_id) VALUES ($1, $2)',
+                        [playerToReceive.game_player_id, card.card_id]
+                    );
+                    cardsDealtCount++;
+                } else {
+                    break; 
+                }
+            }
+            
+            activeGamePiles.set(gameId, []); 
+            gameLastPlayInfo.delete(gameId); 
+
+            await client.query(`UPDATE game_players SET is_turn = FALSE WHERE game_id = $1`, [gameId]);
+            await client.query(`UPDATE game_players SET is_turn = TRUE WHERE game_id = $1 AND position = 0`, [gameId]);
+
+            await client.query('COMMIT');
+            console.log(`[game:${gameId}] Game started successfully by ${username}.`);
+            await broadcastGameState(io, gameId);
+            callback?.({ success: true });
+        } catch (error: any) {
+            await client.query('ROLLBACK');
+            console.error(`[game:${gameId}] Error game:start by ${username}:`, error);
+            callback?.({ error: error.message || 'Failed to start game' });
+        } finally {
+            client.release();
+        }
+    });
+
+    socket.on('game:playCards', async ({ gameId, cardsToPlayIds, declaredRank }, callback) => {
+        if (!userId || !username) return callback?.({ error: 'Not authenticated' });
+        const clientDb = await pool.connect();
+        try {
+            await clientDb.query('BEGIN');
+            const playerInfoRes = await clientDb.query(
+                `SELECT gp.game_player_id, gp.position, gp.is_turn 
+                 FROM game_players gp WHERE gp.game_id = $1 AND gp.user_id = $2`,
+                [gameId, userId]
             );
-            // Assign cards round-robin
-            for (let i = 0; i < cards.length; i++) {
-                const player = players[i % players.length];
-                await pool.query(
-                    'INSERT INTO cards_held (game_player_id, card_id) VALUES ($1, $2)',
-                    [player.game_player_id, cards[i].card_id]
+            if (!playerInfoRes.rows.length) throw new Error('Player not found in this game.');
+            const { game_player_id: gamePlayerId, position: playerPosition, is_turn: isTurn } = playerInfoRes.rows[0];
+
+            if (!isTurn) throw new Error("Not your turn.");
+            if (!cardsToPlayIds || !Array.isArray(cardsToPlayIds) || cardsToPlayIds.length === 0) {
+                throw new Error("No cards selected/sent to play.");
+            }
+            if (!declaredRank) throw new Error("Declared rank is required.");
+
+            const actualPlayedCardsDetails: Card[] = [];
+            for (const cardId of cardsToPlayIds) {
+                const cardDetailsRes = await clientDb.query(
+                    `SELECT c.card_id, c.value, c.shape 
+                     FROM card c JOIN cards_held ch ON c.card_id = ch.card_id
+                     WHERE ch.game_player_id = $1 AND ch.card_id = $2`,
+                    [gamePlayerId, cardId]
                 );
+                if(!cardDetailsRes.rows.length) throw new Error(`Card ID ${cardId} not found in your hand.`);
+                actualPlayedCardsDetails.push(cardDetailsRes.rows[0]);
+
+                const deleteResult = await clientDb.query(
+                    'DELETE FROM cards_held WHERE game_player_id = $1 AND card_id = $2',
+                    [gamePlayerId, cardId]
+                );
+                if (deleteResult.rowCount === 0) throw new Error(`Failed to remove card ${cardId} from hand.`);
+            }
+            
+            const pile = activeGamePiles.get(gameId) || [];
+            pile.push(...actualPlayedCardsDetails); 
+            activeGamePiles.set(gameId, pile);
+
+            const currentPlayInfo: LastPlayInfo = {
+                gamePlayerId: gamePlayerId,
+                playerPosition: playerPosition,
+                cardsPlayed: actualPlayedCardsDetails, 
+                declaredRank: declaredRank,
+                cardCount: cardsToPlayIds.length
+            };
+            gameLastPlayInfo.set(gameId, currentPlayInfo);
+            
+            const remainingCardsRes = await clientDb.query(
+                `SELECT COUNT(*) as count FROM cards_held WHERE game_player_id = $1`,
+                [gamePlayerId]
+            );
+            if (parseInt(remainingCardsRes.rows[0].count, 10) === 0) {
+                await clientDb.query(`UPDATE game SET state = 'ended' WHERE game_id = $1`, [gameId]);
+                await clientDb.query(`UPDATE game_players SET is_winner = TRUE, is_turn = FALSE WHERE game_player_id = $1`, [gamePlayerId]);
+                await clientDb.query(`UPDATE game_players SET is_turn = FALSE WHERE game_id = $1 AND game_player_id != $2`, [gameId, gamePlayerId]);
+
+                console.log(`[game:${gameId}] Player ${username} (Pos: ${playerPosition}) has won!`);
+                io.to(`game:${gameId}`).emit('game:gameOver', { 
+                    winnerPosition: playerPosition,
+                    winnerUsername: username,
+                    message: `Player ${username} (P${playerPosition + 1}) has played all their cards and won!`
+                });
+            } else {
+                 await advanceTurn(gameId);
             }
 
-            // Set up initial turn and state
-            gameStates.set(gameId, {
-                currentTurn: 0,
-                lastPlay: null
+            await clientDb.query('COMMIT');
+            io.to(`game:${gameId}`).emit('game:actionPlayed', { 
+                 type: 'play',
+                 playerPosition: playerPosition,
+                 username: username, 
+                 cardCount: cardsToPlayIds.length,
+                 declaredRank: declaredRank,
             });
+            await broadcastGameState(io, gameId);
+            callback?.({ success: true });
+        } catch (error: any) {
+            await clientDb.query('ROLLBACK');
+            console.error(`[game:${gameId}] Error game:playCards for ${username}:`, error);
+            callback?.({ error: error.message || 'Failed to play cards' });
+        } finally {
+            clientDb.release();
+        }
+    });
 
-            // Send each player their hand and info
-            for (const player of players) {
-                // Get hand for this player
-                const handRes = await pool.query(
-                    `SELECT c.* FROM cards_held ch JOIN card c ON ch.card_id = c.card_id WHERE ch.game_player_id = $1`,
-                    [player.game_player_id]
-                );
-                // Emit to this player's socket(s)
-                socket.to(`user:${player.user_id}`).emit('game:started', {
-                    playerPosition: player.position,
-                    totalPlayers: players.length,
-                    hand: handRes.rows
-                });
-                // If this is the current user, emit directly
-                if ((socket as any).userId === player.user_id) {
-                    socket.emit('game:started', {
-                        playerPosition: player.position,
-                        totalPlayers: players.length,
-                        hand: handRes.rows
-                    });
+    socket.on('game:callBS', async ({ gameId }, callback) => {
+        if (!userId || !username) return callback?.({ error: 'Not authenticated' });
+        const clientDb = await pool.connect();
+        try {
+            await clientDb.query('BEGIN');
+            const callerInfoRes = await clientDb.query(
+                `SELECT gp.game_player_id, gp.position, gp.is_turn 
+                 FROM game_players gp WHERE gp.game_id = $1 AND gp.user_id = $2`,
+                [gameId, userId]
+            );
+            if (!callerInfoRes.rows.length) throw new Error('Caller not found in this game.');
+            const { game_player_id: callerGamePlayerId, position: callerPosition, is_turn: isCallersTurn } = callerInfoRes.rows[0];
+
+            if (!isCallersTurn) throw new Error("Not your turn to call BS.");
+
+            const lastPlay = gameLastPlayInfo.get(gameId);
+            if (!lastPlay) throw new Error('No play to call BS on.');
+            if (lastPlay.gamePlayerId === callerGamePlayerId) throw new Error("Cannot call BS on your own play.");
+
+            const {
+                gamePlayerId: challengedGamePlayerId, 
+                playerPosition: challengedPlayerPosition,
+                cardsPlayed: actualCardsInLastPlay, 
+                declaredRank, 
+            } = lastPlay;
+
+            let wasBluff = false;
+            const rankMap: { [key: string]: number } = { 'A':1, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':11, 'Q':12, 'K':13 };
+            const declaredNumericRank = rankMap[declaredRank.toUpperCase()]; 
+            if (isNaN(declaredNumericRank)) throw new Error("Invalid declared rank format in the last play data.");
+
+            for (const card of actualCardsInLastPlay) {
+                if (card.value !== declaredNumericRank) {
+                    wasBluff = true;
+                    break;
                 }
             }
 
-            callback?.({ success: true });
-        } catch (error) {
-            console.error('Error starting game:', error);
-            callback?.({ error: 'Failed to start game' });
-        }
-    });
+            const pile = activeGamePiles.get(gameId) || []; 
+            let pileReceiverGamePlayerId: number;
+            let pileReceiverPosition: number;
+            let eventMessage: string;
 
-    // Play cards event
-    socket.on('game:playCards', async ({ gameId, cards, declaredRank }, callback) => {
-        try {
-            const userId = (socket as any).userId;
-            if (!userId) {
-                callback?.({ error: 'Not authenticated' });
-                return;
-            }
-            // Get player info
-            const playerRes = await pool.query(
-                `SELECT gp.game_player_id, gp.position FROM game_players gp WHERE gp.game_id = $1 AND gp.user_id = $2`,
-                [gameId, userId]
+            const challengedPlayerDbRes = await clientDb.query(
+                `SELECT u.username FROM "user" u JOIN game_players gp ON u.user_id = gp.user_id WHERE gp.game_player_id = $1`, 
+                [challengedGamePlayerId]
             );
-            if (!playerRes.rows.length) {
-                callback?.({ error: 'Not a player in this game' });
-                return;
+            const challengedUsername = challengedPlayerDbRes.rows.length ? challengedPlayerDbRes.rows[0].username : `P${challengedPlayerPosition+1}`;
+            const callerUsername = username; 
+
+            if (wasBluff) { 
+                pileReceiverGamePlayerId = challengedGamePlayerId; 
+                pileReceiverPosition = challengedPlayerPosition;
+                eventMessage = `${callerUsername} (P${callerPosition + 1}) called BS! ${challengedUsername} (P${challengedPlayerPosition + 1}) WAS bluffing and takes the pile.`;
+            } else { 
+                pileReceiverGamePlayerId = callerGamePlayerId; 
+                pileReceiverPosition = callerPosition;
+                eventMessage = `${callerUsername} (P${callerPosition + 1}) called BS! ${challengedUsername} (P${challengedPlayerPosition + 1}) was NOT bluffing. ${callerUsername} takes the pile.`;
             }
-            const player = playerRes.rows[0];
-            // Remove played cards from player's hand
-            for (const card of cards) {
-                await pool.query(
-                    'DELETE FROM cards_held WHERE game_player_id = $1 AND card_id = $2',
-                    [player.game_player_id, card.card_id]
+
+            for (const cardInPile of pile) {
+                await clientDb.query(
+                    'INSERT INTO cards_held (game_player_id, card_id) VALUES ($1, $2)',
+                    [pileReceiverGamePlayerId, cardInPile.card_id]
                 );
             }
-            // Update last play in memory
-            const state = gameStates.get(gameId) || { currentTurn: 0, lastPlay: null };
-            state.lastPlay = {
-                playerId: player.position,
-                cards,
-                declaredRank
-            };
-            // Advance turn
-            const playersRes = await pool.query('SELECT COUNT(*) FROM game_players WHERE game_id = $1', [gameId]);
-            const totalPlayers = parseInt(playersRes.rows[0].count, 10);
-            state.currentTurn = (state.currentTurn + 1) % totalPlayers;
-            gameStates.set(gameId, state);
+            activeGamePiles.set(gameId, []); 
+            gameLastPlayInfo.delete(gameId); 
 
-            // Get updated game state including hands
-            const updatedState = await getGameState(gameId);
-            if (!updatedState) {
-                callback?.({ error: 'Failed to get updated game state' });
-                return;
-            }
-
-            // Get the player's updated hand
-            const handRes = await pool.query(
-                `SELECT c.* 
-                 FROM cards_held ch
-                 JOIN game_players gp ON ch.game_player_id = gp.game_player_id
-                 JOIN card c ON ch.card_id = c.card_id
-                 WHERE gp.game_id = $1 AND gp.user_id = $2`,
-                [gameId, userId]
-            );
-
-            // First emit the play event
-            socket.to(`game:${gameId}`).emit('game:cardPlayed', {
-                playerPosition: player.position,
-                cardCount: cards.length,
-                declaredRank,
-                nextTurn: state.currentTurn
+            await clientDb.query(`UPDATE game_players SET is_turn = FALSE WHERE game_id = $1`, [gameId]); 
+            await clientDb.query(`UPDATE game_players SET is_turn = TRUE WHERE game_player_id = $1`, [pileReceiverGamePlayerId]); 
+            
+            await clientDb.query('COMMIT');
+            io.to(`game:${gameId}`).emit('game:bsResult', {
+                callerPosition,
+                callerUsername,
+                challengedPlayerPosition,
+                challengedUsername,
+                wasBluff,
+                revealedCards: actualCardsInLastPlay, 
+                pileReceiverPosition,
+                message: eventMessage
             });
-            socket.emit('game:cardPlayed', {
-                playerPosition: player.position,
-                cardCount: cards.length,
-                declaredRank,
-                nextTurn: state.currentTurn
-            });
-
-            // Then emit updated state to all players
-            socket.to(`game:${gameId}`).emit('game:state', {
-                ...updatedState,
-                hand: [] // Other players get empty hand
-            });
-            // Current player gets their updated hand
-            socket.emit('game:state', {
-                ...updatedState,
-                hand: handRes.rows,
-                yourPosition: player.position
-            });
-
+            await broadcastGameState(io, gameId);
             callback?.({ success: true });
-        } catch (error) {
-            console.error('Error playing cards:', error);
-            callback?.({ error: 'Failed to play cards' });
+        } catch (error: any) {
+            await clientDb.query('ROLLBACK');
+            console.error(`[game:${gameId}] Error game:callBS for ${username}:`, error);
+            callback?.({ error: error.message || 'Failed to process BS call' });
+        } finally {
+            clientDb.release();
         }
     });
 
-    // Get updated hand event
-    socket.on('game:getUpdatedHand', async ({ gameId }, callback) => {
-        try {
-            const userId = (socket as any).userId;
-            if (!userId) {
-                callback?.({ error: 'Not authenticated' });
-                return;
-            }
-            // Get player's game_player_id
-            const playerRes = await pool.query(
-                `SELECT gp.game_player_id FROM game_players gp WHERE gp.game_id = $1 AND gp.user_id = $2`,
-                [gameId, userId]
-            );
-            if (!playerRes.rows.length) {
-                callback?.({ error: 'Not a player in this game' });
-                return;
-            }
-            const gamePlayerId = playerRes.rows[0].game_player_id;
-            // Get hand
-            const handRes = await pool.query(
-                `SELECT c.* FROM cards_held ch JOIN card c ON ch.card_id = c.card_id WHERE ch.game_player_id = $1`,
-                [gamePlayerId]
-            );
-            socket.emit('game:state', {
-                hand: handRes.rows
-            });
-            callback?.({ success: true });
-        } catch (error) {
-            console.error('Error getting updated hand:', error);
-            callback?.({ error: 'Failed to get updated hand' });
-        }
+    socket.on('disconnect', (reason) => {
+        console.log(`[game] socket ${socket.id} (${username || 'User (details unavailable)'}) disconnected: ${reason}`);
+        // Further enhancements could involve notifying other players in the game room:
+        // if (gameId && username) { // Ensure gameId and username are known
+        //     io.to(`game:${gameId}`).emit('game:playerLeft', { username, reason });
+        // }
+        // And potentially more complex logic like pausing the game or assigning AI if a player drops.
     });
-
-    // Placeholder for Call BS event (to be implemented with full logic)
-    socket.on('game:callBS', async ({ gameId }, callback) => {
-        // TODO: Implement BS logic (check last play, reveal cards, assign pile, update hands, etc.)
-        // For now, just emit a dummy result and update all hands
-        try {
-            // Example: just broadcast a fake result
-            socket.to(`game:${gameId}`).emit('game:bsResult', {
-                callingPlayer: 0,
-                calledPlayer: 1,
-                wasBluffing: false,
-                cards: []
-            });
-            socket.emit('game:bsResult', {
-                callingPlayer: 0,
-                calledPlayer: 1,
-                wasBluffing: false,
-                cards: []
-            });
-            // After BS, emit updated state to all
-            const gameState = await getGameState(gameId);
-            if (gameState) {
-                socket.to(`game:${gameId}`).emit('game:state', gameState);
-                socket.emit('game:state', gameState);
-            }
-            callback?.({ success: true });
-        } catch (error) {
-            callback?.({ error: 'Failed to process BS call' });
-        }
-    });
-
-    // After every play, also emit updated state to all players for UI sync
-    // (Wrap the playCards handler's callback)
-    const origPlayCards = socket.listeners('game:playCards')[0];
-    socket.off('game:playCards', origPlayCards);
-    socket.on('game:playCards', async (data, callback) => {
-        await origPlayCards(data, callback);
-        // After play, emit updated state
-        const gameId = data.gameId;
-        const gameState = await getGameState(gameId);
-        if (gameState) {
-            socket.to(`game:${gameId}`).emit('game:state', gameState);
-            socket.emit('game:state', gameState);
-        }
-    });
-
-    // --- Add gameplay logic here later ---
 }

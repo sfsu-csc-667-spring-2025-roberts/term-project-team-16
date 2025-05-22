@@ -1,254 +1,46 @@
+// Establish socket connection
 const socket = io({
     reconnection: true,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 5000,
-    reconnectionAttempts: 5,
+    reconnectionAttempts: Infinity,
     transports: ['websocket', 'polling'],
     path: '/socket.io',
     autoConnect: true,
     timeout: 10000
 });
 
-// Get game ID from the URL
+// Extract gameId from the URL path
 const pathParts = window.location.pathname.split('/');
 const gameId = pathParts[pathParts.length - 1];
 
-// DOM elements
+// DOM Element References
 const chatForm = document.getElementById('game-chat-form');
 const chatInput = document.getElementById('game-chat-input');
-const chatMessages = document.getElementById('game-chat-messages');
-const submitButton = chatForm?.querySelector('button[type="submit"]');
-const gameStatus = document.getElementById('game-status');
+const chatMessagesList = document.getElementById('game-chat-messages');
+const submitChatButton = chatForm?.querySelector('button[type="submit"]');
+
+const gameStatusEl = document.getElementById('game-status');
 const startGameBtn = document.getElementById('start-game-btn');
-const playerHand = document.getElementById('player-hand');
-const pileCount = document.getElementById('pile-count');
-const declaredRank = document.getElementById('declared-rank');
+const playerHandEl = document.getElementById('player-hand');
+const pileInfoEl = document.getElementById('pile-info');
+const currentDeclarationEl = document.getElementById('current-declaration');
 const playForm = document.getElementById('play-form');
+const playCardsBtn = document.getElementById('play-cards-btn');
 const callBSBtn = document.getElementById('call-bs-btn');
+const declaredRankSelect = document.getElementById('declared-rank-select');
+const gameLogEl = document.getElementById('game-log');
+const playerListEl = document.getElementById('player-list-display');
 
-// Game state
-let isGameStarted = false;
-let playerPosition = -1;
-let totalPlayers = 0;
-let currentHand = [];
-
-// Game mechanics
+// Client-side state variables
+let currentHand = []; // Stores card objects: { card_id, value, shape }
+let myPlayerPosition = -1;
 let isMyTurn = false;
+let currentGamePhase = 'loading'; // Can be: loading, waiting, playing, ended, error
 
-// Initialize UI
-if (gameStatus) gameStatus.textContent = 'Waiting for players...';
-
-// Handle starting the game
-startGameBtn?.addEventListener('click', async () => {
-    if (isGameStarted) return;
-    
-    try {
-        const response = await fetch(`/games/${gameId}/start`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        });
-
-        if (response.ok) {
-            if (gameStatus) gameStatus.textContent = 'Starting game...';
-            if (startGameBtn) startGameBtn.disabled = true;
-            socket.emit('game:start', { gameId }, (response) => {
-                if (response?.error) {
-                    console.error('Error starting game:', response.error);
-                    if (gameStatus) gameStatus.textContent = response.error;
-                    if (startGameBtn) startGameBtn.disabled = false;
-                }
-            });
-        } else {
-            const error = await response.json();
-            if (gameStatus) gameStatus.textContent = error.error || 'Failed to start game';
-        }
-    } catch (error) {
-        console.error('Error starting game:', error);
-        if (gameStatus) gameStatus.textContent = 'Failed to start game';
-    }
-});
-
-// Handle game events
-socket.on('game:started', (data) => {
-    isGameStarted = true;
-    playerPosition = data.playerPosition;
-    totalPlayers = data.totalPlayers;
-    currentHand = data.hand;
-
-    if (startGameBtn) startGameBtn.style.display = 'none';
-    if (gameStatus) gameStatus.textContent = 'Game in progress';
-    
-    renderPlayerHand(data.hand);
-});
-
-// Render the player's hand
-function renderPlayerHand(cards) {
-    if (!playerHand) return;
-    
-    playerHand.innerHTML = '';
-    cards.forEach(card => {
-        const cardElement = document.createElement('div');
-        cardElement.className = 'card';
-        cardElement.textContent = getCardDisplay(card);
-        cardElement.dataset.cardId = card.card_id;
-        playerHand.appendChild(cardElement);
-    });
-}
-
-// Helper function to format card display
-function getCardDisplay(card) {
-    const valueMap = {
-        1: 'A', 11: 'J', 12: 'Q', 13: 'K'
-    };
-    const value = valueMap[card.value] || card.value;
-    const shape = card.shape.charAt(0).toUpperCase();
-    return `${value}${shape}`;
-}
-
-// Join game room when connecting
-socket.on('connect', () => {
-    console.log('Connected to game server');
-    socket.emit('game:join-room', { gameId }, (response) => {
-        if (response?.error) {
-            console.error('Error joining game room:', response.error);
-            handleConnectionError('Failed to join game room');
-            return;
-        }
-        console.log('Successfully joined game room');
-        // Load message history for this game
-        socket.emit('game:loadMessages', { gameId }, (response) => {
-            if (response?.error) {
-                console.error('Error loading messages:', response.error);
-                handleConnectionError('Failed to load message history');
-            }
-        });
-        // Request latest game state after joining
-        socket.emit('game:getState', { gameId }, () => {});
-    });
-});
-
-// Update turn state
-function updateTurnState(currentTurn) {
-    isMyTurn = playerPosition === currentTurn;
-    if (gameStatus) {
-        if (isMyTurn) {
-            gameStatus.textContent = "It's your turn!";
-            if (playForm) playForm.style.display = 'block';
-        } else {
-            gameStatus.textContent = `Waiting for player ${currentTurn + 1}...`;
-            if (playForm) playForm.style.display = 'none';
-        }
-    }
-}
-
-// Handle play form submission
-playForm?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    if (!isMyTurn) return;
-
-    const selectedCards = Array.from(document.querySelectorAll('.card.selected')).map(card => {
-        const cardId = card.dataset.cardId;
-        return currentHand.find(h => h.card_id.toString() === cardId);
-    });
-
-    if (selectedCards.length === 0) {
-        if (gameStatus) gameStatus.textContent = 'Please select cards to play';
-        return;
-    }
-
-    const declaredRankSelect = document.getElementById('declared-rank-select');
-    const declaredRank = declaredRankSelect?.value;
-
-    socket.emit('game:playCards', {
-        gameId,
-        cards: selectedCards,
-        declaredRank
-    }, (response) => {
-        if (response?.error) {
-            if (gameStatus) gameStatus.textContent = response.error;
-            return;
-        }
-        // Do not update hand here; wait for backend events to update hand
-    });
-});
-
-// Handle BS button
-callBSBtn?.addEventListener('click', () => {
-    socket.emit('game:callBS', { gameId }, (response) => {
-        if (response?.error) {
-            if (gameStatus) gameStatus.textContent = response.error;
-            return;
-        }
-    });
-});
-
-// Handle card selection
-document.getElementById('player-hand')?.addEventListener('click', (e) => {
-    if (!isMyTurn) return;
-    const card = e.target.closest('.card');
-    if (card) {
-        card.classList.toggle('selected');
-    }
-});
-
-// Handle sending messages
-chatForm?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const message = chatInput.value.trim();
-    if (!message) return;
-    
-    try {
-        submitButton.disabled = true; // Prevent double-submit
-        socket.emit('game:sendMessage', { gameId, message }, (ack) => {
-            if (ack?.error) {
-                console.error('Message failed to send:', ack.error);
-                handleConnectionError(ack.error);
-                submitButton.disabled = false;
-                return;
-            }
-            chatInput.value = '';
-            submitButton.disabled = false;
-        });
-    } catch (err) {
-        console.error('Error sending message:', err);
-        handleConnectionError('Failed to send message');
-        submitButton.disabled = false;
-    }
-});
-
-// Handle receiving messages
-socket.on('game:newMessage', data => {
-    appendMessage(data);
-});
-
-// Handle loading chat history
-socket.on('game:loadMessages', messages => {
-    chatMessages.innerHTML = '';
-    messages.forEach(msg => appendMessage(msg));
-});
-
-function appendMessage(data) {
-    const el = document.createElement('li');
-    el.className = 'chat-message';
-    const username = data.username ? escapeHtml(data.username) : 'Anonymous';
-    const content = escapeHtml(data.content);
-    el.innerHTML = `<strong>${username}</strong>: ${content} <small>${new Date(data.created_at).toLocaleTimeString()}</small>`;
-    chatMessages.appendChild(el);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-}
-
-function handleConnectionError(message) {
-    const errorMsg = document.createElement('li');
-    errorMsg.className = 'error-message';
-    errorMsg.textContent = message;
-    chatMessages.appendChild(errorMsg);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-}
-
-// Helper function to prevent XSS
+// Utility to escape HTML for safe rendering in UI
 function escapeHtml(unsafe) {
+    if (typeof unsafe !== 'string') return '';
     return unsafe
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
@@ -257,138 +49,364 @@ function escapeHtml(unsafe) {
         .replace(/'/g, "&#039;");
 }
 
-// Socket event handlers for game mechanics
-socket.on('game:turnUpdate', ({ currentTurn }) => {
-    updateTurnState(currentTurn);
-});
-
-socket.on('game:cardPlayed', ({ playerPosition: playedByPosition, cardCount, declaredRank, nextTurn }) => {
-    // Update the UI to show what was played
-    if (gameStatus) {
-        gameStatus.textContent = `Player ${playedByPosition + 1} played ${cardCount} ${declaredRank}s`;
-    }
-    if (declaredRank) {
-        const declaredRankSpan = document.getElementById('declared-rank');
-        if (declaredRankSpan) declaredRankSpan.textContent = declaredRank;
-    }
-    updateTurnState(nextTurn);
-});
-
-socket.on('game:bsResult', ({ callingPlayer, calledPlayer, wasBluffing, cards }) => {
-    const callingPlayerPosition = playerPosition === callingPlayer ? 'You' : `Player ${callingPlayer + 1}`;
-    const calledPlayerPosition = playerPosition === calledPlayer ? 'you' : `Player ${calledPlayer + 1}`;
-    
-    if (gameStatus) {
-        if (wasBluffing) {
-            gameStatus.textContent = `${callingPlayerPosition} caught ${calledPlayerPosition} bluffing!`;
-        } else {
-            gameStatus.textContent = `${callingPlayerPosition} called BS wrong! ${calledPlayerPosition} were honest.`;
-        }
-    }
-
-    // If we were involved in the BS call, update our hand
-    if (playerPosition === calledPlayer || playerPosition === callingPlayer) {
-        // Server will send updated hands in a separate event
-        socket.emit('game:getUpdatedHand', { gameId });
-    }
-});
-
-// Handle game state
-socket.on('game:state', (data) => {
-    // Always update game state from backend
-    if (typeof data.isGameStarted !== 'undefined') {
-        isGameStarted = data.isGameStarted;
-    } else if (data.gameState) {
-        isGameStarted = data.gameState.state === 'playing';
-    }
-    if (typeof data.playerPosition !== 'undefined') {
-        playerPosition = data.playerPosition;
-    } else if (typeof data.yourPosition !== 'undefined') {
-        playerPosition = data.yourPosition;
-    }
-    if (data.players) {
-        totalPlayers = data.players.length;
-    }
-    if (data.hand) {
-        currentHand = data.hand;
-        renderPlayerHand(currentHand);
-    }
-    if (startGameBtn) {
-        if (isGameStarted) {
-            startGameBtn.style.display = 'none';
-        } else {
-            startGameBtn.style.display = 'block';
-            startGameBtn.disabled = false;
-        }
-    }
-    if (gameStatus) {
-        if (!isGameStarted) {
-            gameStatus.textContent = 'Waiting for game to start...';
-        } else if (typeof data.currentTurn !== 'undefined') {
-            updateTurnState(data.currentTurn);
-        }
-    }
-    // Update declared rank if there was a last play
-    if (data.lastPlay && declaredRank) {
-        declaredRank.textContent = data.lastPlay.declaredRank;
-    }
-    // Update player info in UI
-    if (data.players) {
-        updatePlayerList(data.players);
-    }
-});
-
-// After every play or BS, request the latest state if not already handled
-socket.on('game:cardPlayed', () => {
-    socket.emit('game:getState', { gameId }, () => {});
-});
-socket.on('game:bsResult', () => {
-    socket.emit('game:getState', { gameId }, () => {});
-});
-
-// Function to update player list display
-function updatePlayerList(players) {
-    const gameInfo = document.querySelector('.game-info');
-    if (!gameInfo) return;
-
-    // Remove existing player list if any
-    const existingList = gameInfo.querySelector('.player-list');
-    if (existingList) existingList.remove();
-
-    // Create new player list
-    const playerList = document.createElement('div');
-    playerList.className = 'player-list';
-    
-    players.forEach(player => {
-        const playerEl = document.createElement('div');
-        playerEl.className = 'player-info';
-        if (player.position === playerPosition) playerEl.classList.add('current-player');
-        
-        playerEl.innerHTML = `
-            <span class="player-name">${player.username}</span>
-            <span class="card-count">${player.card_count} cards</span>
-        `;
-        playerList.appendChild(playerEl);
-    });
-
-    gameInfo.appendChild(playerList);
+// Appends a chat message to the chat UI
+function appendChatMessage(data) {
+    if (!chatMessagesList) return;
+    const el = document.createElement('li');
+    el.className = 'chat-message';
+    const username = data.username ? escapeHtml(data.username) : 'System'; // Default to System for system messages
+    const content = escapeHtml(data.content);
+    const time = data.created_at ? new Date(data.created_at).toLocaleTimeString() : new Date().toLocaleTimeString();
+    el.innerHTML = `<strong>${username}</strong>: ${content} <small>${time}</small>`;
+    chatMessagesList.appendChild(el);
+    chatMessagesList.scrollTop = chatMessagesList.scrollHeight; // Auto-scroll to latest message
 }
 
-// Request game state on page load
-window.addEventListener('load', () => {
-    socket.emit('game:getState', { gameId }, (response) => {
-        if (response?.error) {
-            console.error('Error getting game state:', response.error);
-            if (gameStatus) gameStatus.textContent = 'Error loading game state';
-            return;
+// Logs a game action to the game log UI, prepending new messages
+function logGameAction(message, type = 'info') { // type can be 'info', 'error', 'success', 'warning'
+    if (!gameLogEl) return;
+    const logEntry = document.createElement('p');
+    logEntry.className = `log-entry log-${type}`; // For styling based on message type
+    logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+    if (gameLogEl.firstChild) {
+        gameLogEl.insertBefore(logEntry, gameLogEl.firstChild);
+    } else {
+        gameLogEl.appendChild(logEntry);
+    }
+}
+
+// Renders the player's hand of cards in the UI
+function renderPlayerHand(handCards) {
+    if (!playerHandEl) return;
+    playerHandEl.innerHTML = ''; // Clear previous hand display
+    currentHand = handCards || []; // Update local cache of hand
+
+    // Sort cards for a consistent and organized display (e.g., by value, then shape)
+    currentHand.sort((a, b) => {
+        if (a.value === b.value) return a.shape.localeCompare(b.shape);
+        return a.value - b.value;
+    });
+
+    currentHand.forEach(card => {
+        const cardElement = document.createElement('div');
+        cardElement.className = 'card hand-card'; // Assign classes for styling
+        cardElement.dataset.cardId = card.card_id; // Store card ID for later use
+        cardElement.dataset.value = card.value;   // Store value
+        cardElement.dataset.shape = card.shape;   // Store shape
+
+        // Map card values and shapes to displayable symbols/text
+        const valueMap = { 1: 'A', 11: 'J', 12: 'Q', 13: 'K' };
+        const displayValue = valueMap[card.value] || card.value.toString();
+        const shapeSymbols = { 'hearts': '♥', 'diamonds': '♦', 'clubs': '♣', 'spades': '♠' };
+        const displayShape = shapeSymbols[card.shape.toLowerCase()] || card.shape.charAt(0).toUpperCase();
+        
+        cardElement.textContent = `${displayValue}${displayShape}`; // Set card text (e.g., "A♠", "10♥")
+        // Add class for color styling (e.g., red for hearts/diamonds)
+        if (card.shape.toLowerCase() === 'hearts' || card.shape.toLowerCase() === 'diamonds') {
+            cardElement.classList.add('red-card');
         }
-        if (response?.success && response.state) {
-            socket.emit('game:state', response.state);
+
+        // Add click listener for selecting/deselecting cards
+        cardElement.addEventListener('click', () => {
+            if (isMyTurn && currentGamePhase === 'playing') {
+                cardElement.classList.toggle('selected'); // Toggle 'selected' class
+            } else if (currentGamePhase !== 'playing') {
+                logGameAction("Game is not currently in play.", "info");
+            } else {
+                logGameAction("It's not your turn to select cards.", "info");
+            }
+        });
+        playerHandEl.appendChild(cardElement); // Add card to the hand display
+    });
+}
+
+// Updates the UI display of players, their card counts, and whose turn it is
+function updatePlayerListDisplay(players, myPos, currentTurnPos) {
+    if (!playerListEl) return;
+    playerListEl.innerHTML = ''; // Clear previous player list
+
+    // Sort players by position for consistent display order
+    players.sort((a,b) => a.position - b.position).forEach(player => {
+        const playerDiv = document.createElement('div');
+        playerDiv.className = 'player-info-item';
+        if (player.position === myPos) {
+            playerDiv.classList.add('current-user-player'); // Highlight the current user
+        }
+        if (player.position === currentTurnPos && currentGamePhase === 'playing') {
+            playerDiv.classList.add('active-turn-player'); // Highlight player whose turn it is
+        }
+        playerDiv.innerHTML = `
+            <span class="player-name">${escapeHtml(player.username)} (P${player.position + 1})</span>
+            <span class="card-count">${player.card_count} card${player.card_count === 1 ? '' : 's'}</span>
+            ${(player.position === currentTurnPos && currentGamePhase === 'playing') ? '<span class="turn-indicator">TURN</span>' : ''}
+        `;
+        playerListEl.appendChild(playerDiv);
+    });
+}
+
+// Socket Connection Event Handlers
+socket.on('connect', () => {
+    console.log('Connected to game server. Socket ID:', socket.id);
+    appendChatMessage({ content: 'Connected to game server.', username: "System" });
+    // Automatically try to join the game room associated with the current gameId
+    socket.emit('game:join-room', { gameId }, (response) => {
+        if (response?.error) {
+            console.error('Error joining game room:', response.error);
+            appendChatMessage({ content: `Error joining game: ${response.error}`, username: 'System' });
+            if (gameStatusEl) gameStatusEl.textContent = `Error: ${response.error}`;
+            currentGamePhase = 'error';
+        } else {
+            console.log('Successfully joined game room:', gameId);
+            // Request chat history for this game upon joining
+            socket.emit('game:loadMessages', { gameId }); 
         }
     });
 });
 
-// Handle disconnection cleanup
+socket.on('disconnect', (reason) => {
+    console.log('Disconnected from game server:', reason);
+    appendChatMessage({ content: `Disconnected: ${reason}. Attempting to reconnect...`, username: 'System' });
+    if (gameStatusEl) gameStatusEl.textContent = "Connection lost. Reconnecting...";
+    currentGamePhase = 'loading'; // Set phase to loading to reflect reconnection attempt
+    // Clear UI elements that depend on an active game state
+    if(playerHandEl) playerHandEl.innerHTML = '<p class="text-center text-gray-400">Reconnecting...</p>';
+    if(playerListEl) playerListEl.innerHTML = '';
+    playForm?.style.display = 'none';
+    callBSBtn?.style.display = 'none';
+    startGameBtn?.style.display = 'none';
+});
+
+socket.on('connect_error', (error) => {
+    console.error('Connection Error:', error);
+    appendChatMessage({ content: `Connection Error: ${error.message}`, username: 'System' });
+    if (gameStatusEl) gameStatusEl.textContent = "Could not connect to server.";
+    currentGamePhase = 'error';
+});
+
+
+// Core Game State Update Handler - This is the main function that reacts to server updates
+socket.on('game:stateUpdate', (state) => {
+    console.log('Received game:stateUpdate:', state);
+    if (!state || state.gameId !== gameId) {
+        console.warn("Received state for wrong gameId or invalid state. Ignoring.");
+        return;
+    }
+
+    myPlayerPosition = state.yourPosition ?? -1; // Update current player's position
+    currentGamePhase = state.gameState.state; // Update current game phase ('waiting', 'playing', 'ended')
+    // Determine if it's the current player's turn
+    isMyTurn = state.currentTurnPosition === myPlayerPosition && currentGamePhase === 'playing';
+
+    // Render the player's hand if data is available and position is known
+    if (state.hand && myPlayerPosition !== -1) {
+        renderPlayerHand(state.hand);
+    } else if (myPlayerPosition === -1 && state.hand && state.hand.length > 0){
+         // This case indicates an issue, hand data received without knowing who "I" am.
+         console.warn("Received hand data but player position (yourPosition) is unknown. Hand not rendered.");
+    }
+
+    // Update UI elements based on the game state
+    if (gameStatusEl) {
+        if (currentGamePhase === 'waiting') {
+            gameStatusEl.textContent = `Waiting for players... (${state.gameState.current_num_players} joined). Min 2 to start.`;
+            // Show start button if enough players have joined AND the current user is part of the game
+            startGameBtn?.style.display = (state.gameState.current_num_players >=2 && myPlayerPosition !== -1) ? 'block' : 'none';
+            playForm?.style.display = 'none'; // Hide play form
+            callBSBtn?.style.display = 'none';  // Hide BS button
+        } else if (currentGamePhase === 'playing') {
+            startGameBtn?.style.display = 'none'; // Hide start button
+            playForm?.style.display = isMyTurn ? 'flex' : 'none'; // Show play form only if it's my turn
+            // Show BS button if: a play has been made, it's my turn, AND I am not the one who made the last play.
+            callBSBtn?.style.display = (state.lastPlay && isMyTurn && myPlayerPosition !== state.lastPlay.playerPosition) ? 'block' : 'none';
+
+            const currentPlayer = state.players.find(p => p.position === state.currentTurnPosition);
+            if (currentPlayer) {
+                gameStatusEl.textContent = isMyTurn ? "Your Turn!" : `Waiting for ${escapeHtml(currentPlayer.username)} (P${currentPlayer.position + 1})`;
+            } else {
+                // This state should ideally not be reached if currentTurnPosition is always valid in 'playing' phase
+                gameStatusEl.textContent = "Game in progress... (Error determining turn)";
+            }
+        } else if (currentGamePhase === 'ended') {
+            const winner = state.players.find(p => p.card_count === 0); // Simple win condition
+            gameStatusEl.textContent = winner ? `Game Over! ${escapeHtml(winner.username)} (P${winner.position + 1}) wins!` : "Game Over!";
+            playForm?.style.display = 'none';
+            callBSBtn?.style.display = 'none';
+            startGameBtn?.style.display = 'none'; // Or a "Play Again?" button could be shown
+        }
+    }
+
+    // Update pile information
+    if (pileInfoEl) {
+        pileInfoEl.textContent = `Pile: ${state.pileCardCount} card${state.pileCardCount === 1 ? '' : 's'}`;
+    }
+
+    // Update display of the last declared play
+    if (currentDeclarationEl) {
+        if (state.lastPlay) {
+            const playerWhoPlayed = state.players.find(p => p.position === state.lastPlay.playerPosition);
+            const declaredBy = playerWhoPlayed ? escapeHtml(playerWhoPlayed.username) : `P${state.lastPlay.playerPosition + 1}`;
+            currentDeclarationEl.textContent = `Last: ${declaredBy} declared ${state.lastPlay.cardCount} x ${escapeHtml(state.lastPlay.declaredRank)}`;
+        } else {
+            currentDeclarationEl.textContent = (currentGamePhase === 'playing') ? 'Pile is clean. Make the first play!' : 'No play yet.';
+        }
+    }
+    // Update the list of players and their statuses
+    updatePlayerListDisplay(state.players, myPlayerPosition, state.currentTurnPosition);
+});
+
+// Handle incoming chat messages
+socket.on('game:newMessage', (data) => {
+    if (data.game_id === gameId) { // Ensure message is for the current game
+        appendChatMessage(data);
+    }
+});
+
+// Load chat history for the game
+socket.on('game:loadMessages', (messages) => {
+    if (chatMessagesList) chatMessagesList.innerHTML = ''; // Clear old messages
+    messages.forEach(msg => appendChatMessage(msg));
+});
+
+// Log when a player makes a play
+socket.on('game:actionPlayed', ({ playerPosition, username, cardCount, declaredRank }) => {
+    const playerName = username ? escapeHtml(username) : `P${playerPosition + 1}`;
+    logGameAction(`${playerName} played ${cardCount} card(s) declared as ${escapeHtml(declaredRank)}.`);
+});
+
+// Log the result of a BS call
+socket.on('game:bsResult', ({ callerPosition, callerUsername, challengedPlayerPosition, challengedUsername, wasBluff, revealedCards, pileReceiverPosition, message }) => {
+    logGameAction(message, wasBluff ? 'warning' : 'success'); // Style log based on outcome
+    // Optionally display the cards that were revealed during the BS call
+    if (revealedCards && revealedCards.length > 0) {
+        const cardsString = revealedCards.map(c => {
+            const valueMap = { 1: 'A', 11: 'J', 12: 'Q', 13: 'K' };
+            return (valueMap[c.value] || c.value.toString()) + c.shape.charAt(0).toUpperCase();
+        }).join(', ');
+        logGameAction(`Revealed cards from play: ${cardsString}`);
+    }
+    if (currentDeclarationEl) currentDeclarationEl.textContent = 'BS called. Pile resolved.';
+});
+
+// Handle game over event
+socket.on('game:gameOver', ({ winnerPosition, winnerUsername, message}) => {
+    logGameAction(message, 'success');
+    if(gameStatusEl) gameStatusEl.textContent = message;
+    currentGamePhase = 'ended'; // Set game phase
+    // Hide action buttons
+    playForm?.style.display = 'none';
+    callBSBtn?.style.display = 'none';
+    startGameBtn?.style.display = 'none'; // Or change to "Play Again?"
+});
+
+
+// UI Event Listeners for Player Actions
+startGameBtn?.addEventListener('click', () => {
+    logGameAction('Attempting to start game...', 'info');
+    startGameBtn.disabled = true; // Prevent double clicks
+    socket.emit('game:start', { gameId }, (response) => {
+        startGameBtn.disabled = false; // Re-enable button after server response or error
+        if (response?.error) {
+            console.error('Error starting game:', response.error);
+            logGameAction(`Error starting game: ${response.error}`, 'error');
+            if (gameStatusEl) gameStatusEl.textContent = `Error: ${response.error}`;
+        }
+        // Game start success is handled by 'game:stateUpdate'
+    });
+});
+
+playCardsBtn?.addEventListener('click', (e) => {
+    e.preventDefault(); // Prevent form submission if it's part of a form
+    if (!isMyTurn) {
+        logGameAction("Cannot play: Not your turn.", "error");
+        return;
+    }
+    const selectedCardsElements = playerHandEl?.querySelectorAll('.card.selected');
+    if (!selectedCardsElements || selectedCardsElements.length === 0) {
+        logGameAction("No cards selected. Click cards in your hand to select them.", "error");
+        return;
+    }
+
+    const cardsToPlayIds = Array.from(selectedCardsElements).map(el => parseInt(el.dataset.cardId));
+    const rankToDeclare = declaredRankSelect?.value;
+
+    if (!rankToDeclare) {
+        logGameAction("Please select a rank to declare for your play (e.g., '7', 'Ace').", "error");
+        return;
+    }
+
+    playCardsBtn.disabled = true; // Disable button to prevent multiple submissions
+    socket.emit('game:playCards', { gameId, cardsToPlayIds, declaredRank: rankToDeclare }, (response) => {
+        playCardsBtn.disabled = false; // Re-enable button
+        if (response?.error) {
+            console.error('Error playing cards:', response.error);
+            logGameAction(`Error playing cards: ${response.error}`, 'error');
+        } else {
+            // Visual feedback that cards were sent; actual hand update comes from server
+            // logGameAction(`You played ${cardsToPlayIds.length} card(s) as ${escapeHtml(rankToDeclare)}. Waiting for server...`);
+            selectedCardsElements.forEach(el => el.classList.remove('selected')); // Clear selection
+        }
+    });
+});
+
+callBSBtn?.addEventListener('click', () => {
+    if (currentGamePhase !== 'playing' || !isMyTurn) {
+        logGameAction("Cannot call BS now (not your turn or game not in play).", "info");
+        return;
+    }
+    // Client-side check if there's a last play to call BS on (already handled by button visibility)
+    // but an extra check here doesn't hurt.
+    if (!currentDeclarationEl?.textContent?.includes('Last:')) {
+         logGameAction("No recent play to call BS on.", "info");
+         return;
+    }
+
+    logGameAction("Calling BS...", 'info');
+    callBSBtn.disabled = true; // Disable button
+    socket.emit('game:callBS', { gameId }, (response) => {
+        callBSBtn.disabled = false; // Re-enable
+        if (response?.error) {
+            console.error('Error calling BS:', response.error);
+            logGameAction(`Error calling BS: ${response.error}`, 'error');
+        }
+        // Outcome and state update are handled by server's 'game:stateUpdate' and 'game:bsResult'
+    });
+});
+
+// Chat form submission
+chatForm?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const message = chatInput?.value.trim();
+    if (message && chatInput) {
+        socket.emit('game:sendMessage', { gameId, message }, (ack) => {
+            if (ack?.error) {
+                // Display send error in chat or log
+                appendChatMessage({ content: `Chat send error: ${ack.error}`, username: 'System' });
+            }
+        });
+        chatInput.value = ''; // Clear input field
+    }
+});
+
+// Notify server when player is leaving the page
 window.addEventListener('beforeunload', () => {
     socket.emit('game:leave-room', { gameId });
+    // Note: 'beforeunload' doesn't guarantee the message will be sent, especially on mobile.
 });
+
+// Populate the declared rank dropdown (Ace to King)
+if (declaredRankSelect) {
+    const ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+    ranks.forEach(rank => {
+        const option = document.createElement('option');
+        option.value = rank; // Value sent to server
+        option.textContent = rank; // Text displayed to user
+        declaredRankSelect.appendChild(option);
+    });
+}
+
+// Initial UI state before connection is fully established or state is received
+if(gameStatusEl) gameStatusEl.textContent = "Connecting to game...";
+if(playForm) playForm.style.display = 'none';
+if(callBSBtn) callBSBtn.style.display = 'none';
+if(startGameBtn) startGameBtn.style.display = 'none';
+
