@@ -237,6 +237,40 @@ html, body {
     margin: 0.5rem 0;
 }
 
+.player-list {
+    margin-top: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    background: #1f232a;
+    border-radius: 6px;
+}
+
+.player-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 1rem;
+    background: #2a2f35;
+    border-radius: 4px;
+    color: #fff;
+}
+
+.player-info.current-player {
+    border: 1px solid #4c8cff;
+    background: #2f3842;
+}
+
+.player-name {
+    font-weight: 600;
+}
+
+.card-count {
+    color: #9ba1a8;
+    font-size: 0.9rem;
+}
+
 @media (max-width: 600px) {
     .game-info, .action-section, .game-log, .player-hand-section {
         min-width: unset;

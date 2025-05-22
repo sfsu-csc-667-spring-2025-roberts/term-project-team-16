@@ -35,9 +35,9 @@ const listGames: RequestHandler = async (req, res, next) => {
         const limit = parseInt(req.query.limit as string) || 10;
         const offset = (page - 1) * limit;
 
-        // Get total count of active games (waiting to start)
+        // Get total count of all active games (waiting or playing)
         const countResult = await pool.query(
-            `SELECT COUNT(*) FROM game WHERE state = 'waiting'`
+            `SELECT COUNT(*) FROM game WHERE state IN ('waiting', 'playing')`
         );
         const totalGames = parseInt(countResult.rows[0].count);
         const totalPages = Math.max(1, Math.ceil(totalGames / limit));
@@ -56,7 +56,7 @@ const listGames: RequestHandler = async (req, res, next) => {
             FROM game g
             LEFT JOIN game_players gp ON g.game_id = gp.game_id
             LEFT JOIN "user" u ON gp.user_id = u.user_id
-            WHERE g.state = 'waiting'
+            WHERE g.state IN ('waiting', 'playing')
             GROUP BY g.game_id
             ORDER BY g.game_id DESC
             LIMIT $1 OFFSET $2`,

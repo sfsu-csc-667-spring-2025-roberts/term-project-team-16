@@ -84,10 +84,16 @@ socket.on('auth:status', (data) => {
             chatInput.placeholder = 'Please login to send messages...';
             chatInput.disabled = true;
             submitButton.disabled = true;
+            socket.auth = { authenticated: false };
         } else {
             chatInput.placeholder = 'Type your message...';
             chatInput.disabled = false;
             submitButton.disabled = false;
+            socket.auth = { 
+                authenticated: true, 
+                username: data.username,
+                userId: data.userId 
+            };
         }
     }
 });
@@ -197,39 +203,56 @@ function updatePaginationControls(pagination) {
 function createGameElement(game) {
     const div = document.createElement('div');
     div.className = 'game-item';
+    
+    // Check if current user is in the game
+    const userId = socket.auth?.userId;
+    const isPlayerInGame = game.players.some(p => p.user_id === userId);
+    div.setAttribute('data-user-in-game', isPlayerInGame ? 'true' : 'false');
+    
     div.innerHTML = `
         <div class="game-info">
             <span class="game-id">Game #${game.game_id}</span>
             <span class="player-count">${game.players.length} players</span>
+            <span class="game-status ${game.state}">${game.state === 'waiting' ? 'Waiting' : 'In Progress'}</span>
         </div>
         <div class="game-actions">
-            ${game.started_at ? 
-                '<span class="game-status">In Progress</span>' :
-                '<button class="btn join-game" data-game-id="' + game.game_id + '">Join Game</button>'
+            ${isPlayerInGame ? 
+                `<button class="btn ${game.state === 'playing' ? 'rejoin-game' : 'join-game'}" data-game-id="${game.game_id}">
+                    ${game.state === 'playing' ? 'Rejoin Game' : 'Return to Game'}
+                </button>` :
+                (game.state === 'waiting' ? 
+                    `<button class="btn join-game" data-game-id="${game.game_id}">Join Game</button>` :
+                    '<span class="game-status">In Progress</span>'
+                )
             }
         </div>
     `;
 
-    // Add join game handler
-    const joinButton = div.querySelector('.join-game');
-    if (joinButton) {
-        joinButton.addEventListener('click', async () => {
-            const gameId = joinButton.getAttribute('data-game-id');
-            try {
-                const response = await fetch(`/games/${gameId}/join`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-                
-                if (response.ok) {
-                    window.location.href = `/games/${gameId}`;
-                } else {
-                    const error = await response.json();
-                    alert(error.error || 'Failed to join game');
+    // Add join/rejoin game handler
+    const actionButton = div.querySelector('.join-game, .rejoin-game');
+    if (actionButton) {
+        actionButton.addEventListener('click', async () => {
+            const gameId = actionButton.getAttribute('data-game-id');
+            if (isPlayerInGame) {
+                // If player is already in the game, just navigate to it
+                window.location.href = `/games/${gameId}`;
+            } else {
+                try {
+                    const response = await fetch(`/games/${gameId}/join`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    
+                    if (response.ok) {
+                        window.location.href = `/games/${gameId}`;
+                    } else {
+                        const error = await response.json();
+                        alert(error.error || 'Failed to join game');
+                    }
+                } catch (error) {
+                    console.error('Error joining game:', error);
+                    alert('Failed to join game');
                 }
-            } catch (error) {
-                console.error('Error joining game:', error);
-                alert('Failed to join game');
             }
         });
     }
@@ -268,6 +291,31 @@ document.getElementById('create-game')?.addEventListener('click', async () => {
         }
     } catch (error) {
         console.error('Error creating game:', error);
+    }
+});
+
+// Handle game state changes
+socket.on('game:stateChanged', (data) => {
+    const gamesGrid = document.getElementById('active-games');
+    if (!gamesGrid) return;
+
+    // Find and update the existing game element if it exists
+    const existingGame = Array.from(gamesGrid.children).find(el => {
+        const button = el.querySelector('button[data-game-id]');
+        return button && button.getAttribute('data-game-id') === data.gameId;
+    });
+
+    if (existingGame) {
+        const gameData = {
+            game_id: data.gameId,
+            state: data.state,
+            players: data.players
+        };
+        const updatedGame = createGameElement(gameData);
+        existingGame.replaceWith(updatedGame);
+    } else {
+        // If game not found in current view, refresh the whole list
+        fetchGames(gameState.currentPage);
     }
 });
 

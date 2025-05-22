@@ -29,7 +29,8 @@ export default function handleLobbyConnection(socket: Socket): void {
     // Emit initial auth status
     socket.emit('auth:status', { 
         authenticated: !!userId,
-        username: username || null
+        username: username || null,
+        userId: userId || null
     });
 
     // If authenticated, add to active users
