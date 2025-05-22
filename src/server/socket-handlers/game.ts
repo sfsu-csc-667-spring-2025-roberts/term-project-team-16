@@ -1,17 +1,13 @@
-import type { Socket as OriginalSocket } from "socket.io"; // Use OriginalSocket to avoid name clash
+import { Server as IOServer, Socket as OriginalSocket } from "socket.io"; // Use OriginalSocket to avoid name clash
 import pool from "../config/database";
-// If SessionData is exported from express-session augmentation, you might import it
-// import { SessionData } from 'express-session'; // Or from wherever your SessionData is available
-// import { IncomingMessage } from "http";
+import { AugmentedSocket } from "../config/socket"; // Import AugmentedSocket
 
 // Define an interface for the socket object that includes your custom properties
-interface AugmentedSocket extends OriginalSocket {
-    userId?: number;
-    username?: string;
-    // If you needed to access the session object itself via socket.request
-    // and ensure it's typed correctly after middleware, it would be more complex:
-    // request: IncomingMessage & { session: SessionData & { userId?: number; username?: string; } };
-}
+// Moved to socket.ts to be reusable, re-export or define locally if preferred
+// interface AugmentedSocket extends OriginalSocket {
+//     userId?: number;
+//     username?: string;
+// }
 
 interface ChatMessage {
     content: string;
@@ -34,34 +30,30 @@ interface PlayerState {
     isCurrentTurn: boolean;
 }
 
-// Details of the last play made in a game
 interface LastPlayInfo {
-    gamePlayerId: number; // game_player_id of the player who made the last play
-    playerPosition: number; // position of the player who made the last play
-    cardsPlayed: Card[]; // Actual cards that were put down
-    declaredRank: string; // The rank declared by the player
-    cardCount: number; // How many cards were declared
+    gamePlayerId: number;
+    playerPosition: number;
+    cardsPlayed: Card[];
+    declaredRank: string;
+    cardCount: number;
 }
 
 interface GameStateForClient {
     gameId: string;
     gameState: {
-        state: string; // e.g., 'waiting', 'playing', 'ended'
+        state: string;
         current_num_players: number;
     };
     players: PlayerState[];
-    currentTurnPosition: number; // The position of the player whose turn it is
-    lastPlay: LastPlayInfo | null; // Information about the immediately preceding play
-    hand?: Card[]; // Only sent to the specific player
-    yourPosition?: number; // Player's own position
-    pileCardCount: number; // Number of cards in the central pile
+    currentTurnPosition: number;
+    lastPlay: LastPlayInfo | null;
+    hand?: Card[];
+    yourPosition?: number;
+    pileCardCount: number;
 }
 
-// In-memory store for the actual cards in the central pile for each game
-const activeGamePiles = new Map<string, Card[]>(); // gameId -> array of cards in the pile
-
-// In-memory store for the last play information for each game
-const gameLastPlayInfo = new Map<string, LastPlayInfo>(); // gameId -> LastPlayInfo
+const activeGamePiles = new Map<string, Card[]>();
+const gameLastPlayInfo = new Map<string, LastPlayInfo>();
 
 
 async function getPlayerGamePlayerId(gameId: string, userId: number): Promise<number | null> {
@@ -78,7 +70,7 @@ async function getPlayerHand(gamePlayerId: number): Promise<Card[]> {
          FROM cards_held ch 
          JOIN card c ON ch.card_id = c.card_id 
          WHERE ch.game_player_id = $1 
-         ORDER BY c.value, c.shape`, // Consistent hand order
+         ORDER BY c.value, c.shape`,
         [gamePlayerId]
     );
     return handRes.rows;
@@ -141,9 +133,9 @@ async function fetchFullGameStateForClient(gameId: string, targetUserId?: number
     return gameState;
 }
 
-async function broadcastGameState(io: any, gameId: string) {
+async function broadcastGameState(io: IOServer, gameId: string) { // Correctly type io
     console.log(`[game:${gameId}] Broadcasting game state update.`);
-    const baseGameState = await fetchFullGameStateForClient(gameId); 
+    const baseGameState = await fetchFullGameStateForClient(gameId);
     if (!baseGameState) {
         console.error(`[game:${gameId}] Failed to fetch base game state for broadcast.`);
         return;
@@ -175,7 +167,7 @@ async function advanceTurn(gameId: string): Promise<number> {
             );
         } else {
             console.warn(`[game:${gameId}] No current turn found when advancing, defaulting. Previous logic might need check.`);
-            currentPosition = -1; 
+            currentPosition = -1;
         }
 
         const playerCountResult = await client.query(
@@ -205,12 +197,9 @@ async function advanceTurn(gameId: string): Promise<number> {
     }
 }
 
-// Use the AugmentedSocket type for the socket parameter
-export default function handleGameConnection(io: any, socket: AugmentedSocket): void {
+export default function handleGameConnection(io: IOServer, socket: AugmentedSocket): void { // Correctly type io and socket
     console.log(`[game] socket connected: ${socket.id}`);
     
-    // Access userId and username directly from the augmented socket object
-    // These are attached by the middleware in src/server/config/socket.ts
     const userId = socket.userId;
     const username = socket.username;
 
@@ -218,13 +207,13 @@ export default function handleGameConnection(io: any, socket: AugmentedSocket): 
         if (!userId || !username) return callback?.({ error: 'Not authenticated (userId or username missing on socket)' });
         try {
             socket.join(`game:${gameId}`);
-            socket.join(`user:${userId}`); // Ensure user is in their specific room
+            socket.join(`user:${userId}`);
             console.log(`[game:${gameId}] User ${username} (socket ${socket.id}) joined room. User channel: user:${userId}`);
             
             const gameState = await fetchFullGameStateForClient(gameId, userId);
             if (!gameState) return callback?.({ error: 'Game not found' });
             socket.emit('game:stateUpdate', gameState);
-            await broadcastGameState(io, gameId); 
+            await broadcastGameState(io, gameId);
             callback?.({ success: true });
         } catch (error) {
             console.error(`[game:${gameId}] Error game:join-room for ${username}:`, error);
@@ -235,7 +224,7 @@ export default function handleGameConnection(io: any, socket: AugmentedSocket): 
     socket.on('game:leave-room', ({ gameId }, callback) => {
         if (!userId || !username) return callback?.({ error: 'Not authenticated' });
         socket.leave(`game:${gameId}`);
-        socket.leave(`user:${userId}`); // Also leave user-specific room
+        socket.leave(`user:${userId}`);
         console.log(`[game:${gameId}] User ${username} (socket ${socket.id}) left room.`);
         callback?.({ success: true });
     });
@@ -299,29 +288,29 @@ export default function handleGameConnection(io: any, socket: AugmentedSocket): 
 
             const cardsRes = await client.query('SELECT card_id, value, shape FROM card');
             let deck: Card[] = cardsRes.rows;
-            deck = deck.sort(() => Math.random() - 0.5); 
+            deck = deck.sort(() => Math.random() - 0.5);
 
             const gamePlayerIds = players.map(p => p.game_player_id);
             await client.query(`DELETE FROM cards_held WHERE game_player_id = ANY($1::int[])`, [gamePlayerIds]);
 
-            const cardsToDealTotal = 52; 
+            const cardsToDealTotal = 52;
             let cardsDealtCount = 0;
             while(cardsDealtCount < cardsToDealTotal && deck.length > 0) {
                 const playerToReceive = players[cardsDealtCount % players.length];
-                const card = deck.shift(); 
-                if (card) {
+                const cardToDeal = deck.shift(); // 'card' was already declared in outer scope
+                if (cardToDeal) {
                      await client.query(
                         'INSERT INTO cards_held (game_player_id, card_id) VALUES ($1, $2)',
-                        [playerToReceive.game_player_id, card.card_id]
+                        [playerToReceive.game_player_id, cardToDeal.card_id]
                     );
                     cardsDealtCount++;
                 } else {
-                    break; 
+                    break;
                 }
             }
             
-            activeGamePiles.set(gameId, []); 
-            gameLastPlayInfo.delete(gameId); 
+            activeGamePiles.set(gameId, []);
+            gameLastPlayInfo.delete(gameId);
 
             await client.query(`UPDATE game_players SET is_turn = FALSE WHERE game_id = $1`, [gameId]);
             await client.query(`UPDATE game_players SET is_turn = TRUE WHERE game_id = $1 AND position = 0`, [gameId]);
@@ -377,13 +366,13 @@ export default function handleGameConnection(io: any, socket: AugmentedSocket): 
             }
             
             const pile = activeGamePiles.get(gameId) || [];
-            pile.push(...actualPlayedCardsDetails); 
+            pile.push(...actualPlayedCardsDetails);
             activeGamePiles.set(gameId, pile);
 
             const currentPlayInfo: LastPlayInfo = {
                 gamePlayerId: gamePlayerId,
                 playerPosition: playerPosition,
-                cardsPlayed: actualPlayedCardsDetails, 
+                cardsPlayed: actualPlayedCardsDetails,
                 declaredRank: declaredRank,
                 cardCount: cardsToPlayIds.length
             };
@@ -399,7 +388,7 @@ export default function handleGameConnection(io: any, socket: AugmentedSocket): 
                 await clientDb.query(`UPDATE game_players SET is_turn = FALSE WHERE game_id = $1 AND game_player_id != $2`, [gameId, gamePlayerId]);
 
                 console.log(`[game:${gameId}] Player ${username} (Pos: ${playerPosition}) has won!`);
-                io.to(`game:${gameId}`).emit('game:gameOver', { 
+                io.to(`game:${gameId}`).emit('game:gameOver', {
                     winnerPosition: playerPosition,
                     winnerUsername: username,
                     message: `Player ${username} (P${playerPosition + 1}) has played all their cards and won!`
@@ -409,10 +398,10 @@ export default function handleGameConnection(io: any, socket: AugmentedSocket): 
             }
 
             await clientDb.query('COMMIT');
-            io.to(`game:${gameId}`).emit('game:actionPlayed', { 
+            io.to(`game:${gameId}`).emit('game:actionPlayed', {
                  type: 'play',
                  playerPosition: playerPosition,
-                 username: username, 
+                 username: username,
                  cardCount: cardsToPlayIds.length,
                  declaredRank: declaredRank,
             });
@@ -447,42 +436,42 @@ export default function handleGameConnection(io: any, socket: AugmentedSocket): 
             if (lastPlay.gamePlayerId === callerGamePlayerId) throw new Error("Cannot call BS on your own play.");
 
             const {
-                gamePlayerId: challengedGamePlayerId, 
+                gamePlayerId: challengedGamePlayerId,
                 playerPosition: challengedPlayerPosition,
-                cardsPlayed: actualCardsInLastPlay, 
-                declaredRank, 
+                cardsPlayed: actualCardsInLastPlay,
+                declaredRank,
             } = lastPlay;
 
             let wasBluff = false;
             const rankMap: { [key: string]: number } = { 'A':1, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':11, 'Q':12, 'K':13 };
-            const declaredNumericRank = rankMap[declaredRank.toUpperCase()]; 
+            const declaredNumericRank = rankMap[declaredRank.toUpperCase()];
             if (isNaN(declaredNumericRank)) throw new Error("Invalid declared rank format in the last play data.");
 
-            for (const card of actualCardsInLastPlay) {
-                if (card.value !== declaredNumericRank) {
+            for (const cardInPlay of actualCardsInLastPlay) { // Renamed 'card' to 'cardInPlay' to avoid conflict
+                if (cardInPlay.value !== declaredNumericRank) {
                     wasBluff = true;
                     break;
                 }
             }
 
-            const pile = activeGamePiles.get(gameId) || []; 
+            const pile = activeGamePiles.get(gameId) || [];
             let pileReceiverGamePlayerId: number;
             let pileReceiverPosition: number;
             let eventMessage: string;
 
             const challengedPlayerDbRes = await clientDb.query(
-                `SELECT u.username FROM "user" u JOIN game_players gp ON u.user_id = gp.user_id WHERE gp.game_player_id = $1`, 
+                `SELECT u.username FROM "user" u JOIN game_players gp ON u.user_id = gp.user_id WHERE gp.game_player_id = $1`,
                 [challengedGamePlayerId]
             );
             const challengedUsername = challengedPlayerDbRes.rows.length ? challengedPlayerDbRes.rows[0].username : `P${challengedPlayerPosition+1}`;
-            const callerUsername = username; 
+            const callerUsername = username;
 
-            if (wasBluff) { 
-                pileReceiverGamePlayerId = challengedGamePlayerId; 
+            if (wasBluff) {
+                pileReceiverGamePlayerId = challengedGamePlayerId;
                 pileReceiverPosition = challengedPlayerPosition;
                 eventMessage = `${callerUsername} (P${callerPosition + 1}) called BS! ${challengedUsername} (P${challengedPlayerPosition + 1}) WAS bluffing and takes the pile.`;
-            } else { 
-                pileReceiverGamePlayerId = callerGamePlayerId; 
+            } else {
+                pileReceiverGamePlayerId = callerGamePlayerId;
                 pileReceiverPosition = callerPosition;
                 eventMessage = `${callerUsername} (P${callerPosition + 1}) called BS! ${challengedUsername} (P${challengedPlayerPosition + 1}) was NOT bluffing. ${callerUsername} takes the pile.`;
             }
@@ -493,11 +482,11 @@ export default function handleGameConnection(io: any, socket: AugmentedSocket): 
                     [pileReceiverGamePlayerId, cardInPile.card_id]
                 );
             }
-            activeGamePiles.set(gameId, []); 
-            gameLastPlayInfo.delete(gameId); 
+            activeGamePiles.set(gameId, []);
+            gameLastPlayInfo.delete(gameId);
 
-            await clientDb.query(`UPDATE game_players SET is_turn = FALSE WHERE game_id = $1`, [gameId]); 
-            await clientDb.query(`UPDATE game_players SET is_turn = TRUE WHERE game_player_id = $1`, [pileReceiverGamePlayerId]); 
+            await clientDb.query(`UPDATE game_players SET is_turn = FALSE WHERE game_id = $1`, [gameId]);
+            await clientDb.query(`UPDATE game_players SET is_turn = TRUE WHERE game_player_id = $1`, [pileReceiverGamePlayerId]);
             
             await clientDb.query('COMMIT');
             io.to(`game:${gameId}`).emit('game:bsResult', {
@@ -506,7 +495,7 @@ export default function handleGameConnection(io: any, socket: AugmentedSocket): 
                 challengedPlayerPosition,
                 challengedUsername,
                 wasBluff,
-                revealedCards: actualCardsInLastPlay, 
+                revealedCards: actualCardsInLastPlay,
                 pileReceiverPosition,
                 message: eventMessage
             });
@@ -523,10 +512,5 @@ export default function handleGameConnection(io: any, socket: AugmentedSocket): 
 
     socket.on('disconnect', (reason) => {
         console.log(`[game] socket ${socket.id} (${username || 'User (details unavailable)'}) disconnected: ${reason}`);
-        // Further enhancements could involve notifying other players in the game room:
-        // if (gameId && username) { // Ensure gameId and username are known
-        //     io.to(`game:${gameId}`).emit('game:playerLeft', { username, reason });
-        // }
-        // And potentially more complex logic like pausing the game or assigning AI if a player drops.
     });
 }

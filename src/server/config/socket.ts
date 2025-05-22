@@ -6,6 +6,13 @@ import pool from './database';
 import handleLobbyConnection from '../socket-handlers/lobby';
 import handleGameConnection from '../socket-handlers/game';
 
+// Define an interface for the socket object that includes your custom properties
+// This can be moved to a central types file if used in multiple places
+export interface AugmentedSocket extends SocketIOSocket {
+    userId?: number;
+    username?: string;
+}
+
 // Wrapper for express middleware to work with socket.io
 const wrap = (middleware: RequestHandler) => (socket: SocketIOSocket, next: (err?: ExtendedError | undefined) => void) => {
     const req = socket.request as ExpressRequest;
@@ -49,12 +56,13 @@ export function configureSockets(io: Server, sessionMiddleware: RequestHandler):
     io.use(wrap(sessionMiddleware));
 
     // Authentication middleware
-    io.use((socket, next) => {
+    io.use((socket: SocketIOSocket, next) => {
         const session = (socket.request as any).session;
         if (session) {
             // Attach user data to socket instance for easy access
-            (socket as any).userId = session.userId;
-            (socket as any).username = session.username;
+            // Use type assertion to AugmentedSocket
+            (socket as AugmentedSocket).userId = session.userId;
+            (socket as AugmentedSocket).username = session.username;
             next();
         } else {
             // Allow connection without authentication for public chat viewing
@@ -65,29 +73,30 @@ export function configureSockets(io: Server, sessionMiddleware: RequestHandler):
     // Connection handler
     io.on('connection', (socket: SocketIOSocket) => {
         console.log(`Client connected: ${socket.id}`);
+        const augmentedSocket = socket as AugmentedSocket; // Use the augmented type
 
         // Handle user sessions
-        const session = (socket.request as any).session;
+        const session = (augmentedSocket.request as any).session;
         if (session?.userId) {
-            socket.join(`user:${session.userId}`);
+            augmentedSocket.join(`user:${session.userId}`);
         }
 
         // Handle disconnection
-        socket.on('disconnect', (reason) => {
-            console.log(`Client disconnected: ${socket.id}, reason: ${reason}`);
+        augmentedSocket.on('disconnect', (reason) => {
+            console.log(`Client disconnected: ${augmentedSocket.id}, reason: ${reason}`);
             if (session?.userId) {
-                socket.leave(`user:${session.userId}`);
+                augmentedSocket.leave(`user:${session.userId}`);
             }
         });
 
         // Handle errors
-        socket.on('error', (error) => {
-            console.error(`Socket error for ${socket.id}:`, error);
+        augmentedSocket.on('error', (error) => {
+            console.error(`Socket error for ${augmentedSocket.id}:`, error);
         });
 
-        // Set up lobby and game handlers
-        handleLobbyConnection(socket);
-        handleGameConnection(socket);
+        // Set up lobby and game handlers, passing the correctly typed io and socket
+        handleLobbyConnection(io, augmentedSocket);
+        handleGameConnection(io, augmentedSocket);
     });
 
     // Global error handler
