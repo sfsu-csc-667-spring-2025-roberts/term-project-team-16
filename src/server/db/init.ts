@@ -63,6 +63,7 @@ async function initializeDatabase() {
         message_id SERIAL PRIMARY KEY,
         content TEXT NOT NULL,
         author INTEGER REFERENCES "user"(user_id) ON DELETE CASCADE,
+        game_id INTEGER REFERENCES game(game_id) ON DELETE CASCADE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);

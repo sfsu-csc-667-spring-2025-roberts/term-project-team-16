@@ -4,6 +4,7 @@ import { RequestHandler, Response as ExpressResponse, Request as ExpressRequest,
 import { ExtendedError } from 'socket.io/dist/namespace';
 import pool from './database';
 import handleLobbyConnection from '../socket-handlers/lobby';
+import handleGameConnection from '../socket-handlers/game';
 
 // Wrapper for express middleware to work with socket.io
 const wrap = (middleware: RequestHandler) => (socket: SocketIOSocket, next: (err?: ExtendedError | undefined) => void) => {
@@ -84,8 +85,9 @@ export function configureSockets(io: Server, sessionMiddleware: RequestHandler):
             console.error(`Socket error for ${socket.id}:`, error);
         });
 
-        // Set up lobby handlers
+        // Set up lobby and game handlers
         handleLobbyConnection(socket);
+        handleGameConnection(socket);
     });
 
     // Global error handler

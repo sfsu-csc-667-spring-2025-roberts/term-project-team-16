@@ -45,6 +45,7 @@ export default function handleLobbyConnection(socket: Socket): void {
                 `SELECT m.content, u.username, m.created_at
                  FROM messages m
                  JOIN "user" u ON m.author = u.user_id
+                 WHERE m.game_id IS NULL
                  ORDER BY m.created_at DESC
                  LIMIT 20`
             );
@@ -71,10 +72,10 @@ export default function handleLobbyConnection(socket: Socket): void {
                 return;
             }
 
-            // Insert message into database
+            // Insert message into database (null game_id for lobby)
             const result = await pool.query(
-                `INSERT INTO messages (content, author, created_at)
-                 VALUES ($1, $2, NOW())
+                `INSERT INTO messages (content, author, game_id, created_at)
+                 VALUES ($1, $2, NULL, NOW())
                  RETURNING created_at`,
                 [trimmedMessage, userId]
             );

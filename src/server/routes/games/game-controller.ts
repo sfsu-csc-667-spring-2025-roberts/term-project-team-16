@@ -161,7 +161,8 @@ const joinGame: RequestHandler = async (req, res, next) => {
         );
 
         if (playerCheck.rows.length > 0) {
-            res.status(400).json({ error: "Already joined this game" });
+            // User is already in the game, let them rejoin
+            res.json({ message: "Rejoined game successfully" });
             return;
         }
 
