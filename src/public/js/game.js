@@ -9,6 +9,7 @@ class GameClient {
         this.reconnectDelay = 1000;
         this.selectedCards = new Set();
         this.gameState = null;
+        this.pendingWinTimer = null;
         
         this.init();
     }
@@ -119,6 +120,11 @@ class GameClient {
             console.log('[GameClient] Game over:', gameOverData);
             this.handleGameOver(gameOverData);
         });
+
+        this.socket.on('game:pendingWin', (pendingWinData) => {
+            console.log('[GameClient] Pending win:', pendingWinData);
+            this.handlePendingWin(pendingWinData);
+        });
     }
 
     updateConnectionStatus(message, type) {
@@ -198,6 +204,39 @@ class GameClient {
     setupUIElements() {
         // Populate rank selector
         this.populateRankSelector();
+        
+        // Create pending win display if it doesn't exist
+        this.createPendingWinDisplay();
+    }
+
+    createPendingWinDisplay() {
+        if (!document.getElementById('pending-win-display')) {
+            const pendingWinDiv = document.createElement('div');
+            pendingWinDiv.id = 'pending-win-display';
+            pendingWinDiv.className = 'pending-win-display hidden';
+            pendingWinDiv.innerHTML = `
+                <div class="pending-win-content bg-yellow-600 text-white p-4 rounded-lg mb-4">
+                    <div class="pending-win-message font-bold text-lg mb-2"></div>
+                    <div class="pending-win-timer text-2xl font-mono"></div>
+                    <div class="pending-win-actions mt-3">
+                        <button id="pending-bs-btn" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded font-bold">
+                            Call BS!
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            const gameInfo = document.querySelector('.game-info');
+            if (gameInfo) {
+                gameInfo.appendChild(pendingWinDiv);
+            }
+            
+            // Add event listener for pending BS button
+            const pendingBSBtn = document.getElementById('pending-bs-btn');
+            if (pendingBSBtn) {
+                pendingBSBtn.addEventListener('click', () => this.callBS());
+            }
+        }
     }
 
     populateRankSelector() {
@@ -326,6 +365,7 @@ class GameClient {
         this.updatePlayerHand(gameState.hand);
         this.updateGameActions(gameState);
         this.updatePileInfo(gameState);
+        this.updatePendingWin(gameState.pendingWin);
     }
 
     updateGameInfo(gameState) {
@@ -333,7 +373,13 @@ class GameClient {
         if (statusElement) {
             const state = gameState.gameState.state;
             const playerCount = gameState.gameState.current_num_players;
-            statusElement.textContent = `Status: ${state} | Players: ${playerCount}`;
+            let statusText = `Status: ${state} | Players: ${playerCount}`;
+            
+            if (state === 'pending_win' && gameState.pendingWin) {
+                statusText += ` | ${gameState.pendingWin.playerUsername} might win!`;
+            }
+            
+            statusElement.textContent = statusText;
         }
     }
 
@@ -420,20 +466,27 @@ class GameClient {
         if (!actionsContainer) return;
 
         const isPlaying = gameState.gameState.state === 'playing';
+        const isPendingWin = gameState.gameState.state === 'pending_win';
         const isMyTurn = gameState.players.some(p => p.isCurrentTurn && p.position === gameState.yourPosition);
         const hasLastPlay = gameState.lastPlay !== null;
 
         // Show/hide start button
         if (startBtn) {
-            startBtn.style.display = isPlaying ? 'none' : 'block';
+            startBtn.style.display = (isPlaying || isPendingWin) ? 'none' : 'block';
         }
 
         // Show/hide actions container
-        actionsContainer.style.display = isPlaying ? 'block' : 'none';
+        actionsContainer.style.display = (isPlaying || isPendingWin) ? 'block' : 'none';
 
         // Show/hide play form and BS button
         if (playForm && callBSBtn) {
-            if (isMyTurn) {
+            if (isPendingWin) {
+                // During pending win, only show BS button (for non-winner players)
+                playForm.style.display = 'none';
+                const pendingWin = gameState.pendingWin;
+                const isWinningPlayer = pendingWin && pendingWin.playerPosition === gameState.yourPosition;
+                callBSBtn.style.display = (!isWinningPlayer && hasLastPlay) ? 'block' : 'none';
+            } else if (isMyTurn) {
                 if (hasLastPlay) {
                     // Can either play cards or call BS
                     playForm.style.display = 'block';
@@ -467,6 +520,84 @@ class GameClient {
                 declarationElement.textContent = 'No play has been made yet.';
             }
         }
+    }
+
+    updatePendingWin(pendingWin) {
+        const pendingWinDisplay = document.getElementById('pending-win-display');
+        
+        if (!pendingWinDisplay) {
+            this.createPendingWinDisplay();
+            return this.updatePendingWin(pendingWin);
+        }
+
+        if (pendingWin) {
+            // Show pending win display
+            pendingWinDisplay.classList.remove('hidden');
+            
+            const messageElement = pendingWinDisplay.querySelector('.pending-win-message');
+            const timerElement = pendingWinDisplay.querySelector('.pending-win-timer');
+            const actionsElement = pendingWinDisplay.querySelector('.pending-win-actions');
+            
+            if (messageElement) {
+                messageElement.textContent = `${pendingWin.playerUsername} (P${pendingWin.playerPosition + 1}) played their last card!`;
+            }
+            
+            if (timerElement) {
+                timerElement.textContent = `${pendingWin.timeRemaining}s`;
+            }
+            
+            // Hide BS button for the winning player
+            if (actionsElement) {
+                const isWinningPlayer = this.gameState && pendingWin.playerPosition === this.gameState.yourPosition;
+                actionsElement.style.display = isWinningPlayer ? 'none' : 'block';
+            }
+            
+            // Clear existing timer
+            if (this.pendingWinTimer) {
+                clearInterval(this.pendingWinTimer);
+            }
+            
+            // Start countdown timer
+            let timeRemaining = pendingWin.timeRemaining;
+            this.pendingWinTimer = setInterval(() => {
+                timeRemaining--;
+                if (timerElement) {
+                    timerElement.textContent = `${Math.max(0, timeRemaining)}s`;
+                }
+                
+                if (timeRemaining <= 0) {
+                    clearInterval(this.pendingWinTimer);
+                    this.pendingWinTimer = null;
+                }
+            }, 1000);
+            
+        } else {
+            // Hide pending win display
+            pendingWinDisplay.classList.add('hidden');
+            
+            // Clear timer
+            if (this.pendingWinTimer) {
+                clearInterval(this.pendingWinTimer);
+                this.pendingWinTimer = null;
+            }
+        }
+    }
+
+    handlePendingWin(pendingWinData) {
+        this.addGameLogEntry(pendingWinData.message);
+        
+        // Create a visual alert
+        const alertDiv = document.createElement('div');
+        alertDiv.className = 'fixed top-4 left-1/2 transform -translate-x-1/2 bg-yellow-600 text-white px-6 py-3 rounded-lg font-bold text-lg z-50 animate-pulse';
+        alertDiv.textContent = `⚠️ ${pendingWinData.playerUsername} might win! Call BS if they're bluffing!`;
+        document.body.appendChild(alertDiv);
+        
+        // Remove alert after 5 seconds
+        setTimeout(() => {
+            if (alertDiv.parentNode) {
+                alertDiv.parentNode.removeChild(alertDiv);
+            }
+        }, 5000);
     }
 
     handleNewMessage(message) {
@@ -504,6 +635,49 @@ class GameClient {
             : `${result.callerUsername} called BS, but ${result.challengedUsername} was NOT bluffing!`;
         
         this.addGameLogEntry(resultText);
+        
+        // Show revealed cards for a moment
+        if (result.revealedCards && result.revealedCards.length > 0) {
+            this.showRevealedCards(result.revealedCards, result.challengedUsername);
+        }
+    }
+
+    showRevealedCards(cards, playerName) {
+        const revealDiv = document.createElement('div');
+        revealDiv.className = 'fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-black bg-opacity-80 text-white p-6 rounded-lg z-50';
+        
+        let cardsHtml = cards.map(card => {
+            const displayValue = card.value === 1 ? 'A' : 
+                               card.value === 11 ? 'J' : 
+                               card.value === 12 ? 'Q' : 
+                               card.value === 13 ? 'K' : 
+                               card.value.toString();
+            
+            const suitSymbol = {
+                'hearts': '♥️',
+                'diamonds': '♦️',
+                'clubs': '♣️',
+                'spades': '♠️'
+            }[card.shape] || '?';
+            
+            return `<span class="inline-block bg-white text-black px-2 py-1 rounded mx-1">${displayValue}${suitSymbol}</span>`;
+        }).join('');
+        
+        revealDiv.innerHTML = `
+            <div class="text-center">
+                <div class="text-lg font-bold mb-2">${playerName}'s cards revealed:</div>
+                <div class="mb-4">${cardsHtml}</div>
+                <div class="text-sm text-gray-300">Closing in 3 seconds...</div>
+            </div>
+        `;
+        
+        document.body.appendChild(revealDiv);
+        
+        setTimeout(() => {
+            if (revealDiv.parentNode) {
+                revealDiv.parentNode.removeChild(revealDiv);
+            }
+        }, 3000);
     }
 
     handleGameOver(gameOverData) {
@@ -514,6 +688,22 @@ class GameClient {
         if (actionsContainer) {
             actionsContainer.style.display = 'none';
         }
+        
+        // Hide pending win display
+        this.updatePendingWin(null);
+        
+        // Show game over modal
+        const gameOverDiv = document.createElement('div');
+        gameOverDiv.className = 'fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-green-600 text-white p-8 rounded-lg z-50 text-center';
+        gameOverDiv.innerHTML = `
+            <div class="text-2xl font-bold mb-4">🎉 Game Over! 🎉</div>
+            <div class="text-lg mb-4">${gameOverData.message}</div>
+            <button onclick="window.location.href='/'" class="bg-white text-green-600 px-4 py-2 rounded font-bold hover:bg-gray-100">
+                Return to Lobby
+            </button>
+        `;
+        
+        document.body.appendChild(gameOverDiv);
     }
 
     addGameLogEntry(message) {

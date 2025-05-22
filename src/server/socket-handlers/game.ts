@@ -45,7 +45,16 @@ interface GameStateForClient {
     hand?: Card[];
     yourPosition?: number;
     pileCardCount: number;
+    pendingWin?: {
+        playerPosition: number;
+        playerUsername: string;
+        timeRemaining: number; // in seconds
+    };
 }
+
+// Add game timers tracking
+const gameWinTimers = new Map<string, NodeJS.Timeout>();
+const gamePendingWins = new Map<string, { playerPosition: number; playerUsername: string; startTime: number }>();
 
 const activeGamePiles = new Map<string, Card[]>();
 const gameLastPlayInfo = new Map<string, LastPlayInfo>();
@@ -76,7 +85,6 @@ async function getPlayerHand(gamePlayerId: number): Promise<Card[]> {
 }
 
 async function fetchFullGameStateForClient(gameId: string, targetUserId?: number): Promise<GameStateForClient | null> {
-    // console.log(`[GameTS:fetchFullGameState] Fetching state for gameId: ${gameId}, targetUserId: ${targetUserId || 'N/A'}`);
     const gameIdInt = parseInt(gameId, 10);
     if (isNaN(gameIdInt)) {
         console.error(`[GameTS:fetchFullGameState] Invalid gameId format: ${gameId}`);
@@ -94,16 +102,13 @@ async function fetchFullGameStateForClient(gameId: string, targetUserId?: number
     const gameDbState = gameResult.rows[0];
 
     let currentTurnPosition = -1;
-    if (gameDbState.state === 'playing') { 
+    if (gameDbState.state === 'playing' || gameDbState.state === 'pending_win') { 
         const turnResult = await pool.query(
             `SELECT position FROM game_players WHERE game_id = $1 AND is_turn = TRUE AND is_winner = FALSE`,
             [gameIdInt]
         );
         if (turnResult.rows.length > 0) {
             currentTurnPosition = turnResult.rows[0].position;
-        } else {
-            // This is normal if, for example, a BS call just happened and the next turn is about to be set.
-            // console.warn(`[GameTS:fetchFullGameState] Game ${gameIdInt} is 'playing' but no current (non-winning) turn player found.`);
         }
     }
 
@@ -138,6 +143,20 @@ async function fetchFullGameStateForClient(gameId: string, targetUserId?: number
         pileCardCount: pile.length,
     };
 
+    // Add pending win info if game is in pending_win state
+    if (gameDbState.state === 'pending_win') {
+        const pendingWin = gamePendingWins.get(gameId);
+        if (pendingWin) {
+            const timeElapsed = (Date.now() - pendingWin.startTime) / 1000;
+            const timeRemaining = Math.max(0, 15 - timeElapsed); // 15 second window
+            gameState.pendingWin = {
+                playerPosition: pendingWin.playerPosition,
+                playerUsername: pendingWin.playerUsername,
+                timeRemaining: Math.round(timeRemaining)
+            };
+        }
+    }
+
     if (targetUserId) {
         const playerInfo = playersResult.rows.find(p => p.user_id === targetUserId);
         if (playerInfo) {
@@ -147,12 +166,11 @@ async function fetchFullGameStateForClient(gameId: string, targetUserId?: number
             }
         }
     }
-    // console.log(`[GameTS:fetchFullGameState] Constructed state for game ${gameId}, target ${targetUserId || 'all'}. Players card_counts: ${players.map(p=>`${p.username}(${p.isWinner?'W':''}):${p.card_count}`).join(', ')}, Turn: P${currentTurnPosition+1}`);
+
     return gameState;
 }
 
 async function broadcastGameState(io: IOServer, gameId: string) {
-    // console.log(`[GameTS:broadcastGameState] Broadcasting game state for gameId: ${gameId}`);
     const allPlayersState = await fetchFullGameStateForClient(gameId); 
     if (!allPlayersState || !allPlayersState.players) {
         console.error(`[GameTS:broadcastGameState] Failed to fetch all players state for broadcast, gameId: ${gameId}.`);
@@ -163,11 +181,48 @@ async function broadcastGameState(io: IOServer, gameId: string) {
         const specificGameState = await fetchFullGameStateForClient(gameId, player.userId);
         if (specificGameState) {
             const targetSocketRoom = `user:${player.userId}`;
-            // console.log(`[GameTS:broadcastGameState] Emitting 'game:stateUpdate' to ${targetSocketRoom} for game ${gameId}. Hand: ${specificGameState.hand?.length}, CardCount: ${specificGameState.players.find(p=>p.userId === player.userId)?.card_count}, Turn: P${specificGameState.currentTurnPosition+1}`);
             io.to(targetSocketRoom).emit('game:stateUpdate', specificGameState);
         } else {
             console.error(`[GameTS:broadcastGameState] Failed to fetch specific game state for player ${player.userId} in game ${gameId}.`);
         }
+    }
+}
+
+async function finalizePlayerWin(io: IOServer, gameId: string, winnerGamePlayerId: number, winnerPosition: number, winnerUsername: string) {
+    const gameIdInt = parseInt(gameId, 10);
+    const client = await pool.connect();
+    
+    try {
+        await client.query('BEGIN');
+        
+        await client.query(`UPDATE game SET state = 'ended' WHERE game_id = $1`, [gameIdInt]);
+        await client.query(`UPDATE game_players SET is_winner = TRUE, is_turn = FALSE WHERE game_player_id = $1`, [winnerGamePlayerId]);
+        await client.query(`UPDATE game_players SET is_turn = FALSE WHERE game_id = $1 AND game_player_id != $2`, [gameIdInt, winnerGamePlayerId]);
+        
+        await client.query('COMMIT');
+        
+        // Clean up timers and pending win data
+        const timer = gameWinTimers.get(gameId);
+        if (timer) {
+            clearTimeout(timer);
+            gameWinTimers.delete(gameId);
+        }
+        gamePendingWins.delete(gameId);
+        
+        io.to(`game:${gameId}`).emit('game:gameOver', { 
+            winnerPosition, 
+            winnerUsername, 
+            message: `Player ${winnerUsername} (P${winnerPosition + 1}) has won the game!` 
+        });
+        
+        console.log(`[GameTS:finalizePlayerWin] Game ${gameId} ended with winner: ${winnerUsername} (P${winnerPosition + 1})`);
+        
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error(`[GameTS:finalizePlayerWin] Error finalizing win for game ${gameId}:`, error);
+        throw error;
+    } finally {
+        client.release();
     }
 }
 
@@ -188,9 +243,6 @@ async function advanceTurn(gameId: string): Promise<number> {
                 `UPDATE game_players SET is_turn = FALSE WHERE game_player_id = $1`,
                 [currentTurnPlayerResult.rows[0].game_player_id]
             );
-        } else {
-            // This is okay if, for example, the game just started or a BS call resolved the previous turn.
-            // console.warn(`[GameTS:advanceTurn] No current (non-winning) turn player found for game ${gameIdInt} to unset their turn.`);
         }
 
         const activePlayersResult = await client.query(
@@ -219,9 +271,9 @@ async function advanceTurn(gameId: string): Promise<number> {
                         break;
                     }
                 }
-                if (!foundNext && activePlayerPositions.length > 0) { // Wrap around if no one is positionally after
+                if (!foundNext && activePlayerPositions.length > 0) {
                     nextPlayerIndex = 0;
-                } else if (!foundNext) { // No active players found (should be caught by activePlayerPositions.length === 0)
+                } else if (!foundNext) {
                     await client.query('COMMIT');
                     console.error(`[GameTS:advanceTurn] Edge case: Could not determine next player after currentPosition ${currentPosition}. Active: ${activePlayerPositions.join(',')}`);
                     return -1;
@@ -253,7 +305,6 @@ async function advanceTurn(gameId: string): Promise<number> {
         client.release();
     }
 }
-
 
 export default function handleGameConnection(io: IOServer, socket: AugmentedSocket): void {
     console.log(`[GameTS:handleGameConnection] Initializing for socketId=${socket.id}, userId=${socket.userId || 'N/A'}, username=${socket.username || 'N/A'}`);
@@ -297,11 +348,11 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
         try {
             const gameIdInt = parseInt(gameId, 10);
             const result = await pool.query( `INSERT INTO messages (content, author, game_id, created_at) VALUES ($1, $2, $3, NOW()) RETURNING created_at`, [trimmedMessage, socket.userId, gameIdInt]);
-            const messageData: ChatMessage = { content: trimmedMessage, username: socket.username, created_at: result.rows[0].created_at, game_id: gameId };
+            const messageData: ChatMessage = { content: trimmedMessage, username: socket.username || 'Anonymous', created_at: result.rows[0].created_at, game_id: gameId };
             io.to(`game:${gameId}`).emit('game:newMessage', messageData);
             callback?.({ success: true });
         } catch (error) {
-            console.error(`[GameTS:sendMessage] Error for ${socket.username} in game ${gameId}:`, error);
+            console.error(`[GameTS:sendMessage] Error for ${socket.username || 'unknown user'} in game ${gameId}:`, error);
             callback?.({ error: 'Failed to send message.' });
         }
     });
@@ -361,7 +412,7 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
             else if (playersInGame.length > 0) await client.query(`UPDATE game_players SET is_turn = TRUE WHERE game_player_id = $1`, [playersInGame[0].game_player_id]);
             
             await client.query('COMMIT');
-            console.log(`[GameTS:start] Game ${gameId} started by ${socket.username}.`);
+            console.log(`[GameTS:start] Game ${gameId} started by ${socket.username || 'unknown user'}.`);
             await broadcastGameState(io, gameId);
             callback?.({ success: true });
         } catch (error: any) {
@@ -382,7 +433,12 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
         const clientDb = await pool.connect();
         try {
             await clientDb.query('BEGIN');
-            const playerInfoRes = await clientDb.query( `SELECT gp.game_player_id, gp.position, gp.is_turn, g.state as game_state FROM game_players gp JOIN game g ON gp.game_id = g.game_id WHERE gp.game_id = $1 AND gp.user_id = $2`, [gameIdInt, socket.userId]);
+            const playerInfoRes = await clientDb.query( 
+                `SELECT gp.game_player_id, gp.position, gp.is_turn, g.state as game_state 
+                 FROM game_players gp JOIN game g ON gp.game_id = g.game_id 
+                 WHERE gp.game_id = $1 AND gp.user_id = $2`, 
+                [gameIdInt, socket.userId]
+            );
             if (!playerInfoRes.rows.length) throw new Error('Player not found in this game.');
             const { game_player_id: gamePlayerId, position: playerPosition, is_turn: isTurn, game_state: gameState } = playerInfoRes.rows[0];
             if (gameState !== 'playing') throw new Error('Game is not currently in playing state.');
@@ -392,7 +448,12 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
             for (const cardIdStr of cardsToPlayIds) {
                 const cardId = parseInt(cardIdStr, 10);
                 if (isNaN(cardId)) throw new Error(`Invalid card ID format: ${cardIdStr}.`);
-                const cardDetailsRes = await clientDb.query( `SELECT c.card_id, c.value, c.shape FROM card c JOIN cards_held ch ON c.card_id = ch.card_id WHERE ch.game_player_id = $1 AND ch.card_id = $2`, [gamePlayerId, cardId]);
+                const cardDetailsRes = await clientDb.query( 
+                    `SELECT c.card_id, c.value, c.shape FROM card c 
+                     JOIN cards_held ch ON c.card_id = ch.card_id 
+                     WHERE ch.game_player_id = $1 AND ch.card_id = $2`, 
+                    [gamePlayerId, cardId]
+                );
                 if(!cardDetailsRes.rows.length) throw new Error(`Card ID ${cardId} not found in your hand or invalid.`);
                 actualPlayedCardsDetails.push(cardDetailsRes.rows[0]);
                 const deleteResult = await clientDb.query('DELETE FROM cards_held WHERE game_player_id = $1 AND card_id = $2', [gamePlayerId, cardId]);
@@ -409,20 +470,65 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
             const remainingCardsCount = parseInt(remainingCardsRes.rows[0].count, 10);
 
             if (remainingCardsCount === 0) {
-                await clientDb.query(`UPDATE game SET state = 'ended' WHERE game_id = $1`, [gameIdInt]);
-                await clientDb.query(`UPDATE game_players SET is_winner = TRUE, is_turn = FALSE WHERE game_player_id = $1`, [gamePlayerId]);
-                await clientDb.query(`UPDATE game_players SET is_turn = FALSE WHERE game_id = $1 AND game_player_id != $2`, [gameIdInt, gamePlayerId]);
-                io.to(`game:${gameId}`).emit('game:gameOver', { winnerPosition: playerPosition, winnerUsername: socket.username, message: `Player ${socket.username} (P${playerPosition + 1}) has played all their cards and won!` });
+                // Player played their last card - enter pending win state
+                await clientDb.query(`UPDATE game SET state = 'pending_win' WHERE game_id = $1`, [gameIdInt]);
+                await clientDb.query(`UPDATE game_players SET is_turn = FALSE WHERE game_id = $1`, [gameIdInt]);
+                
+                // Store pending win info
+                const pendingWinInfo = {
+                    playerPosition,
+                    playerUsername: socket.username || `P${playerPosition + 1}`,
+                    startTime: Date.now()
+                };
+                gamePendingWins.set(gameId, pendingWinInfo);
+                
+                // Set timer to auto-resolve win after 15 seconds
+                const winTimer = setTimeout(async () => {
+                    try {
+                        await finalizePlayerWin(io, gameId, gamePlayerId, playerPosition, socket.username || `P${playerPosition + 1}`);
+                        await broadcastGameState(io, gameId);
+                    } catch (error) {
+                        console.error(`[GameTS:playCards] Error in win timer for game ${gameId}:`, error);
+                    }
+                }, 15000); // 15 second window
+                
+                gameWinTimers.set(gameId, winTimer);
+                
+                console.log(`[GameTS:playCards] Player ${socket.username || `P${playerPosition + 1}`} (P${playerPosition + 1}) played their last card. 15-second BS window started.`);
+                
+                io.to(`game:${gameId}`).emit('game:actionPlayed', { 
+                    type: 'play', 
+                    playerPosition, 
+                    username: socket.username || `P${playerPosition + 1}`, 
+                    cardCount: cardsToPlayIds.length, 
+                    declaredRank 
+                });
+                
+                io.to(`game:${gameId}`).emit('game:pendingWin', {
+                    playerPosition,
+                    playerUsername: socket.username || `P${playerPosition + 1}`,
+                    timeWindow: 15,
+                    message: `${socket.username || `P${playerPosition + 1}`} (P${playerPosition + 1}) played their last card! Call BS within 15 seconds or they win!`
+                });
+                
             } else {
-                 await advanceTurn(gameId);
+                // Normal play - advance turn
+                await advanceTurn(gameId);
+                io.to(`game:${gameId}`).emit('game:actionPlayed', { 
+                    type: 'play', 
+                    playerPosition, 
+                    username: socket.username || `P${playerPosition + 1}`, 
+                    cardCount: cardsToPlayIds.length, 
+                    declaredRank 
+                });
             }
+            
             await clientDb.query('COMMIT');
-            io.to(`game:${gameId}`).emit('game:actionPlayed', { type: 'play', playerPosition, username: socket.username, cardCount: cardsToPlayIds.length, declaredRank });
             await broadcastGameState(io, gameId);
             callback?.({ success: true });
         } catch (error: any) {
             try { await clientDb.query('ROLLBACK'); } catch (rbError) { console.error("[GameTS:playCards] Rollback error:", rbError); }
-            console.error(`[GameTS:playCards] Error for ${socket.username} in game ${gameId}:`, error.message);
+            console.error(`[GameTS:playCards] Error for ${socket.username || 'unknown user'} in game ${gameId}:`, error.message);
             callback?.({ error: error.message || 'Failed to play cards.' });
         } finally {
             clientDb.release();
@@ -435,15 +541,33 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
         const clientDb = await pool.connect();
         try {
             await clientDb.query('BEGIN');
-            const playerInfoRes = await clientDb.query( `SELECT gp.game_player_id, gp.position, gp.is_turn, g.state as game_state FROM game_players gp JOIN game g ON gp.game_id = g.game_id WHERE gp.game_id = $1 AND gp.user_id = $2`, [gameIdInt, socket.userId]);
+            const playerInfoRes = await clientDb.query( 
+                `SELECT gp.game_player_id, gp.position, g.state as game_state 
+                 FROM game_players gp JOIN game g ON gp.game_id = g.game_id 
+                 WHERE gp.game_id = $1 AND gp.user_id = $2`, 
+                [gameIdInt, socket.userId]
+            );
             if (!playerInfoRes.rows.length) throw new Error('Caller not found in this game.');
-            const { game_player_id: callerGamePlayerId, position: callerPosition, is_turn: isCallersTurn, game_state: gameState } = playerInfoRes.rows[0];
-            if (gameState !== 'playing') throw new Error('Game is not currently in playing state.');
-            if (!isCallersTurn) throw new Error("Not your turn to call BS.");
+            const { game_player_id: callerGamePlayerId, position: callerPosition, game_state: gameState } = playerInfoRes.rows[0];
+            
+            // Allow BS calls during both playing and pending_win states
+            if (gameState !== 'playing' && gameState !== 'pending_win') {
+                throw new Error('Game is not in a state where BS can be called.');
+            }
 
             const lastPlay = gameLastPlayInfo.get(gameId);
             if (!lastPlay) throw new Error('No play to call BS on.');
             if (lastPlay.gamePlayerId === callerGamePlayerId) throw new Error("Cannot call BS on your own play.");
+
+            // If this is during pending_win, clear the win timer
+            if (gameState === 'pending_win') {
+                const timer = gameWinTimers.get(gameId);
+                if (timer) {
+                    clearTimeout(timer);
+                    gameWinTimers.delete(gameId);
+                }
+                gamePendingWins.delete(gameId);
+            }
 
             const { gamePlayerId: challengedGamePlayerId, playerPosition: challengedPlayerPosition, cardsPlayed: actualCardsInLastPlay, declaredRank } = lastPlay;
             let wasBluff = false;
@@ -456,29 +580,75 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
             let pileReceiverGamePlayerId: number, pileReceiverPosition: number, eventMessage: string;
             const challengedPlayerDbRes = await clientDb.query(`SELECT u.username FROM "user" u JOIN game_players gp ON u.user_id = gp.user_id WHERE gp.game_player_id = $1`, [challengedGamePlayerId]);
             const challengedUsername = challengedPlayerDbRes.rows.length ? challengedPlayerDbRes.rows[0].username : `P${challengedPlayerPosition+1}`;
-            const callerUsername = socket.username;
+            const callerUsername = socket.username || `P${callerPosition + 1}`;
 
             if (wasBluff) {
-                pileReceiverGamePlayerId = challengedGamePlayerId; pileReceiverPosition = challengedPlayerPosition;
+                pileReceiverGamePlayerId = challengedGamePlayerId; 
+                pileReceiverPosition = challengedPlayerPosition;
                 eventMessage = `${callerUsername} (P${callerPosition + 1}) correctly called BS! ${challengedUsername} (P${challengedPlayerPosition + 1}) was bluffing and takes the pile (${pile.length} cards).`;
+                
+                // If the challenged player was about to win but was bluffing, they get the pile and game continues
+                if (gameState === 'pending_win') {
+                    console.log(`[GameTS:callBS] Pending win cancelled - ${challengedUsername} was bluffing on their final play.`);
+                }
             } else {
-                pileReceiverGamePlayerId = callerGamePlayerId; pileReceiverPosition = callerPosition;
+                pileReceiverGamePlayerId = callerGamePlayerId; 
+                pileReceiverPosition = callerPosition;
                 eventMessage = `${callerUsername} (P${callerPosition + 1}) called BS! ${challengedUsername} (P${challengedPlayerPosition + 1}) was NOT bluffing. ${callerUsername} takes the pile (${pile.length} cards).`;
+                
+                // If someone incorrectly called BS on a pending win, the challenged player wins immediately
+                if (gameState === 'pending_win') {
+                    console.log(`[GameTS:callBS] Incorrect BS call on pending win - ${challengedUsername} wins immediately.`);
+                    await finalizePlayerWin(io, gameId, challengedGamePlayerId, challengedPlayerPosition, challengedUsername);
+                    await clientDb.query('COMMIT');
+                    
+                    io.to(`game:${gameId}`).emit('game:bsResult', { 
+                        callerPosition, 
+                        callerUsername, 
+                        challengedPlayerPosition, 
+                        challengedUsername, 
+                        wasBluff, 
+                        revealedCards: actualCardsInLastPlay, 
+                        pileReceiverPosition, 
+                        message: eventMessage + ` ${challengedUsername} wins the game!` 
+                    });
+                    
+                    callback?.({ success: true });
+                    return;
+                }
             }
-            if (pile.length > 0) { for (const cardInPile of pile) await clientDb.query('INSERT INTO cards_held (game_player_id, card_id) VALUES ($1, $2)', [pileReceiverGamePlayerId, cardInPile.card_id]); }
+            
+            // Game continues - give pile to appropriate player and set their turn
+            if (pile.length > 0) { 
+                for (const cardInPile of pile) {
+                    await clientDb.query('INSERT INTO cards_held (game_player_id, card_id) VALUES ($1, $2)', [pileReceiverGamePlayerId, cardInPile.card_id]); 
+                }
+            }
             
             activeGamePiles.set(gameId, []);
             gameLastPlayInfo.delete(gameId);
-            await clientDb.query(`UPDATE game_players SET is_turn = FALSE WHERE game_id = $1 AND game_player_id != $2`, [gameIdInt, pileReceiverGamePlayerId]);
+            
+            // Set game back to playing state and give turn to pile receiver
+            await clientDb.query(`UPDATE game SET state = 'playing' WHERE game_id = $1`, [gameIdInt]);
+            await clientDb.query(`UPDATE game_players SET is_turn = FALSE WHERE game_id = $1`, [gameIdInt]);
             await clientDb.query(`UPDATE game_players SET is_turn = TRUE WHERE game_player_id = $1`, [pileReceiverGamePlayerId]);
             
             await clientDb.query('COMMIT');
-            io.to(`game:${gameId}`).emit('game:bsResult', { callerPosition, callerUsername, challengedPlayerPosition, challengedUsername, wasBluff, revealedCards: actualCardsInLastPlay, pileReceiverPosition, message: eventMessage });
+            io.to(`game:${gameId}`).emit('game:bsResult', { 
+                callerPosition, 
+                callerUsername, 
+                challengedPlayerPosition, 
+                challengedUsername, 
+                wasBluff, 
+                revealedCards: actualCardsInLastPlay, 
+                pileReceiverPosition, 
+                message: eventMessage 
+            });
             await broadcastGameState(io, gameId);
             callback?.({ success: true });
         } catch (error: any) {
             try { await clientDb.query('ROLLBACK'); } catch (rbError) { console.error("[GameTS:callBS] Rollback error:", rbError); }
-            console.error(`[GameTS:callBS] Error for ${socket.username} in game ${gameId}:`, error);
+            console.error(`[GameTS:callBS] Error for ${socket.username || 'unknown user'} in game ${gameId}:`, error);
             callback?.({ error: error.message || 'Failed to process BS call.' });
         } finally {
             clientDb.release();
