@@ -2,7 +2,6 @@
 import { Server, Socket as SocketIOSocket } from 'socket.io';
 import { RequestHandler, Response as ExpressResponse, Request as ExpressRequest, NextFunction } from 'express';
 import { ExtendedError } from 'socket.io/dist/namespace';
-// import pool from './database'; // Not directly used in this file for session attachment
 import handleLobbyConnection from '../socket-handlers/lobby';
 import handleGameConnection from '../socket-handlers/game';
 
@@ -12,85 +11,154 @@ export interface AugmentedSocket extends SocketIOSocket {
     username?: string;
 }
 
-// Wrapper for express middleware to work with socket.io
+// Improved wrapper for express middleware to work with socket.io
 const wrap = (middleware: RequestHandler) => (socket: SocketIOSocket, next: (err?: ExtendedError | undefined) => void) => {
     const req = socket.request as ExpressRequest;
     
-    // Create a mock response object
+    // Create a more complete mock response object
     const res = {
-        // Minimal mock for session middleware to function without crashing
-        setHeader: () => {},
+        setHeader: () => res,
         getHeader: () => undefined,
-        end: (cb?: () => void) => { cb?.(); return this; }, // Ensure cb is callable if provided
-        writeHead: () => this,
+        removeHeader: () => res,
+        writeHead: () => res,
+        write: () => res,
+        end: (cb?: () => void) => { 
+            if (cb) setTimeout(cb, 0); 
+            return res; 
+        },
+        on: () => res,
+        once: () => res,
+        emit: () => res,
+        locals: {},
+        headersSent: false,
+        statusCode: 200,
+        statusMessage: 'OK'
     } as unknown as ExpressResponse;
 
-    middleware(req, res, next as NextFunction);
+    try {
+        middleware(req, res, next as NextFunction);
+    } catch (error) {
+        console.error('[Socket Middleware] Error in middleware wrapper:', error);
+        next(error as ExtendedError);
+    }
 };
 
 export function configureSockets(io: Server, sessionMiddleware: RequestHandler): void {
-    // Socket.IO CORS configuration (already present, seems fine)
+    // Socket.IO CORS configuration
     io.engine.on("initial_headers", (headers: Record<string, string>, req) => {
         headers["Access-Control-Allow-Credentials"] = "true";
-        headers["Access-Control-Allow-Origin"] = req.headers.origin || "*"; // Consider restricting this in production
+        const origin = req.headers.origin;
+        if (origin) {
+            headers["Access-Control-Allow-Origin"] = origin;
+        }
     });
 
-    io.engine.opts.pingInterval = 10000;
-    io.engine.opts.pingTimeout = 5000;
+    // Configure engine options
+    io.engine.opts.pingInterval = 25000;  // Increased from 10000
+    io.engine.opts.pingTimeout = 20000;   // Increased from 5000
+    io.engine.opts.upgradeTimeout = 10000;
+    io.engine.opts.maxHttpBufferSize = 1e6;
 
-    // Apply session middleware to Socket.IO
-    io.use(wrap(sessionMiddleware));
-
-    // Authentication middleware - CRITICAL POINT
+    // Apply session middleware to Socket.IO with error handling
     io.use((socket: SocketIOSocket, next) => {
-        const augmentedSocket = socket as AugmentedSocket; // Cast to use custom properties
-        const session = (socket.request as any).session;
-
-        if (session && session.userId && session.username) {
-            augmentedSocket.userId = session.userId;
-            augmentedSocket.username = session.username;
-            console.log(`[Socket Auth] User Authenticated: socketId=${socket.id}, userId=${session.userId}, username=${session.username}`);
+        wrap(sessionMiddleware)(socket, (err?: ExtendedError) => {
+            if (err) {
+                console.error('[Socket Session] Session middleware error:', err);
+                // Don't block connection, but log the issue
+            }
             next();
-        } else {
-            // This allows unauthenticated connections.
-            // Individual handlers (lobby, game) MUST check for userId/username if an action requires authentication.
-            console.log(`[Socket Auth] User NOT fully authenticated (or session incomplete): socketId=${socket.id}. Session userId: ${session?.userId}, Session username: ${session?.username}`);
-            // If you want to enforce auth for *all* socket connections, you might do:
-            // next(new Error('Authentication required'));
-            // However, current design seems to allow connection and then handlers check.
-            // We will ensure handlers are robust.
+        });
+    });
+
+    // Authentication middleware with better error handling
+    io.use((socket: SocketIOSocket, next) => {
+        const augmentedSocket = socket as AugmentedSocket;
+        
+        try {
+            const session = (socket.request as any).session;
+            
+            if (session && session.userId && session.username) {
+                augmentedSocket.userId = session.userId;
+                augmentedSocket.username = session.username;
+                console.log(`[Socket Auth] User authenticated: socketId=${socket.id}, userId=${session.userId}, username=${session.username}`);
+            } else {
+                console.log(`[Socket Auth] Unauthenticated connection: socketId=${socket.id}`);
+                // Set undefined explicitly to ensure consistency
+                augmentedSocket.userId = undefined;
+                augmentedSocket.username = undefined;
+            }
+            
+            next();
+        } catch (error) {
+            console.error('[Socket Auth] Authentication error:', error);
+            // Allow connection but mark as unauthenticated
+            augmentedSocket.userId = undefined;
+            augmentedSocket.username = undefined;
             next();
         }
     });
 
-    // Connection handler
+    // Connection handler with better error handling
     io.on('connection', (socket: SocketIOSocket) => {
-        const augmentedSocket = socket as AugmentedSocket; // Use the augmented type
+        const augmentedSocket = socket as AugmentedSocket;
         console.log(`[Socket Connection] Client connected: socketId=${augmentedSocket.id}, userId=${augmentedSocket.userId || 'N/A'}`);
 
         // Join user-specific room if authenticated
         if (augmentedSocket.userId) {
-            augmentedSocket.join(`user:${augmentedSocket.userId}`);
-            console.log(`[Socket Connection] Socket ${augmentedSocket.id} joined user room: user:${augmentedSocket.userId}`);
+            try {
+                augmentedSocket.join(`user:${augmentedSocket.userId}`);
+                console.log(`[Socket Connection] Socket ${augmentedSocket.id} joined user room: user:${augmentedSocket.userId}`);
+            } catch (error) {
+                console.error(`[Socket Connection] Error joining user room:`, error);
+            }
         }
 
+        // Handle disconnection
         augmentedSocket.on('disconnect', (reason) => {
             console.log(`[Socket Disconnect] Client disconnected: socketId=${augmentedSocket.id}, userId=${augmentedSocket.userId || 'N/A'}, reason: ${reason}`);
+            
             if (augmentedSocket.userId) {
-                augmentedSocket.leave(`user:${augmentedSocket.userId}`);
+                try {
+                    augmentedSocket.leave(`user:${augmentedSocket.userId}`);
+                } catch (error) {
+                    console.error(`[Socket Disconnect] Error leaving user room:`, error);
+                }
             }
         });
 
+        // Handle socket errors
         augmentedSocket.on('error', (error) => {
             console.error(`[Socket Error] Error for socket ${augmentedSocket.id}:`, error);
         });
 
+        // Handle connection errors
+        augmentedSocket.on('connect_error', (error) => {
+            console.error(`[Socket Connection Error] Connection error for socket ${augmentedSocket.id}:`, error);
+        });
+
+        // Add reconnection handling
+        augmentedSocket.on('reconnect', (attemptNumber) => {
+            console.log(`[Socket Reconnect] Socket ${augmentedSocket.id} reconnected after ${attemptNumber} attempts`);
+        });
+
         // Pass the io instance and the correctly typed/augmented socket to handlers
-        handleLobbyConnection(io, augmentedSocket);
-        handleGameConnection(io, augmentedSocket);
+        try {
+            handleLobbyConnection(io, augmentedSocket);
+            handleGameConnection(io, augmentedSocket);
+        } catch (error) {
+            console.error('[Socket Handlers] Error initializing socket handlers:', error);
+        }
     });
 
+    // Handle engine-level connection errors
     io.engine.on("connection_error", (err) => {
-        console.error('[Socket Engine] Connection error:', err.req, err.code, err.message, err.context);
+        console.error('[Socket Engine] Connection error:', {
+            code: err.code,
+            message: err.message,
+            context: err.context,
+            type: err.type
+        });
     });
+
+    console.log('[Socket] Socket.IO server configured successfully');
 }

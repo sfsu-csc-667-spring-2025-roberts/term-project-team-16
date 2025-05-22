@@ -2,8 +2,9 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>BS Card Game</title>
+    <title>BS Card Game - Game <%= gameId %></title> 
     <link rel="stylesheet" href="/css/game.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body>
     <%- include("shared/header") %>
@@ -11,73 +12,62 @@
     <div class="game-container">
         <div class="main-game-area">
             <div class="game-info">
-                <div id="game-status"><!-- Show messages --></div>
-                <div id="pile-info">
-                    <span>Pile:</span>
-                    <span id="pile-count">0 cards</span>
-                </div>
-                <div id="current-declaration">
-                    <span>Current declaration:</span>
-                    <span id="declared-rank">Aces</span>
-                </div>
+                <!-- Connection status will be inserted here by JavaScript -->
+                <h2 class="text-xl font-semibold mb-2">Game #<%= gameId %></h2> 
+                <div id="game-status" class="mb-2">Status: Loading...</div>
+                <div id="pile-info" class="mb-1">Pile: 0 cards</div> 
+                <div id="current-declaration" class="mb-2">No play has been made yet.</div> 
                 <button id="start-game-btn" class="btn primary">Start Game</button>
             </div>
 
-            <div class="player-hand-section">
-                <h3>Your Hand</h3>
-                <div id="player-hand" class="hand-cards">
-                    <!-- Cards will be inserted here -->
+            <div class="player-hand-section my-4">
+                <h3 class="text-lg font-medium mb-2">Your Hand</h3>
+                <div id="player-hand" class="hand-cards flex flex-wrap justify-center gap-2">
+                    <p class="text-gray-500">Loading hand...</p> 
                 </div>
             </div>
 
-            <div class="action-section">
-                <form id="play-form" autocomplete="off">
-                    <label for="selected-cards">Select cards to play:</label>
-                    <div id="selectable-hand" class="hand-cards">
-                        <!-- Selectable cards -->
+            <div id="game-actions-container" class="action-section my-4 p-4 bg-gray-800 rounded-lg shadow-md" style="display: none;">
+                <form id="play-form" autocomplete="off" class="flex flex-col items-center gap-3" style="display: none;">
+                    <div>
+                        <label for="declared-rank-select" class="block mb-1 text-sm font-medium text-gray-300">Declare selected cards as:</label>
+                        <select id="declared-rank-select" required class="bg-gray-700 border border-gray-600 text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5">
+                            <!-- Options will be populated by JavaScript -->
+                        </select>
                     </div>
-                    <label for="declared-rank-select">Declare as:</label>
-                    <select id="declared-rank-select" required>
-                        <option value="A">Aces</option>
-                        <option value="2">Twos</option>
-                        <option value="3">Threes</option>
-                        <option value="4">Fours</option>
-                        <option value="5">Fives</option>
-                        <option value="6">Sixes</option>
-                        <option value="7">Sevens</option>
-                        <option value="8">Eights</option>
-                        <option value="9">Nines</option>
-                        <option value="10">Tens</option>
-                        <option value="J">Jacks</option>
-                        <option value="Q">Queens</option>
-                        <option value="K">Kings</option>
-                    </select>
-                    <button class="btn primary" type="submit">Play Selected Cards</button>
+                    <button id="play-cards-btn" class="btn primary w-full" type="submit">Play Selected Cards</button>
                 </form>
 
-                <button class="btn bs" id="call-bs-btn">Call BS!</button>
+                <button id="call-bs-btn" class="btn bs w-full mt-2" style="display: none;">Call BS!</button>
             </div>
 
-            <div id="game-log" class="game-log">
-                <!-- Game log messages -->
+            <div id="game-log" class="game-log mt-4 p-3 bg-gray-800 rounded-lg shadow-md h-40 overflow-y-auto text-sm">
+                <p class="text-gray-400 italic">Game events will appear here...</p>
             </div>
         </div>
         
         <div class="game-sidebar">
-            <div class="chat-container">
-                <h3>Game Chat</h3>
-                <ul id="game-chat-messages" class="chat-messages-list">
-                    <!-- Chat messages will be inserted here -->
+            <div class="player-list-container mb-4">
+                <h3 class="text-lg font-semibold mb-2 text-gray-200">Players</h3>
+                <div id="player-list-display" class="space-y-2">
+                    <p class="text-gray-400">Loading players...</p>
+                </div>
+            </div>
+
+            <div class="chat-container flex flex-col flex-grow bg-gray-800 rounded-lg shadow-md overflow-hidden">
+                <h3 class="text-lg font-semibold p-3 bg-gray-700 text-gray-200 border-b border-gray-600">Game Chat</h3>
+                <ul id="game-chat-messages" class="chat-messages-list flex-grow p-3 space-y-2 overflow-y-auto">
+                    <!-- Messages will be populated by JavaScript -->
                 </ul>
-                <form id="game-chat-form" class="chat-form">
-                    <input type="text" id="game-chat-input" placeholder="Type your message..." autocomplete="off" required />
-                    <button type="submit">Send</button>
+                <form id="game-chat-form" class="chat-form p-3 border-t border-gray-600 flex gap-2">
+                    <input type="text" id="game-chat-input" placeholder="Type your message..." autocomplete="off" required class="flex-grow bg-gray-700 border border-gray-600 text-gray-200 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 p-2.5" maxlength="500" />
+                    <button type="submit" class="btn primary">Send</button>
                 </form>
             </div>
         </div>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script type="module" src="/js/game.js"></script>
+    <script src="/js/game.js"></script> 
 </body>
 </html>

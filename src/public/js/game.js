@@ -1,464 +1,542 @@
-// Establish socket connection
-const socket = io({
-    reconnection: true,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
-    reconnectionAttempts: Infinity, // Keep trying to reconnect
-    transports: ['websocket', 'polling'],
-    path: '/socket.io',
-    autoConnect: true,
-    timeout: 10000
-});
-
-// Extract gameId from the URL path
-const pathParts = window.location.pathname.split('/');
-const gameId = pathParts[pathParts.length - 1]; // This should be a string
-
-// DOM Element References (ensure these IDs exist in your game.ejs)
-const chatForm = document.getElementById('game-chat-form');
-const chatInput = document.getElementById('game-chat-input');
-const chatMessagesList = document.getElementById('game-chat-messages');
-// const submitChatButton = chatForm?.querySelector('button[type="submit"]'); // Not strictly needed if chatForm listener handles disable
-
-const gameStatusEl = document.getElementById('game-status');
-const startGameBtn = document.getElementById('start-game-btn');
-const playerHandEl = document.getElementById('player-hand');
-const pileInfoEl = document.getElementById('pile-info');
-const currentDeclarationEl = document.getElementById('current-declaration');
-const playForm = document.getElementById('play-form');
-const playCardsBtn = document.getElementById('play-cards-btn');
-const callBSBtn = document.getElementById('call-bs-btn');
-const declaredRankSelect = document.getElementById('declared-rank-select');
-const gameLogEl = document.getElementById('game-log');
-const playerListEl = document.getElementById('player-list-display');
-
-// Client-side state variables
-let currentHand = []; 
-let myPlayerPosition = -1;
-let isMyTurn = false;
-let currentGamePhase = 'loading'; // loading, waiting, playing, ended, error
-
-// Utility to escape HTML
-function escapeHtml(unsafe) {
-    if (typeof unsafe !== 'string') return '';
-    return unsafe
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-}
-
-// Appends a chat message
-function appendChatMessage(data) {
-    if (!chatMessagesList) {
-        console.warn('[CLIENT_CHAT] chatMessagesList element not found.');
-        return;
-    }
-    const el = document.createElement('li');
-    el.className = 'chat-message';
-    const username = data.username ? escapeHtml(data.username) : 'System';
-    const content = escapeHtml(data.content);
-    const time = data.created_at ? new Date(data.created_at).toLocaleTimeString() : new Date().toLocaleTimeString();
-    el.innerHTML = `<strong>${username}</strong>: ${content} <small>${time}</small>`;
-    chatMessagesList.appendChild(el);
-    chatMessagesList.scrollTop = chatMessagesList.scrollHeight;
-}
-
-// Logs a game action
-function logGameAction(message, type = 'info') {
-    if (!gameLogEl) {
-        console.warn('[CLIENT_LOG] gameLogEl element not found.');
-        return;
-    }
-    const logEntry = document.createElement('p');
-    logEntry.className = `log-entry log-${type}`;
-    logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
-    if (gameLogEl.firstChild) {
-        gameLogEl.insertBefore(logEntry, gameLogEl.firstChild);
-    } else {
-        gameLogEl.appendChild(logEntry);
-    }
-     // Optional: Limit log length
-    while (gameLogEl.children.length > 20) { // Keep last 20 entries
-        gameLogEl.removeChild(gameLogEl.lastChild);
-    }
-}
-
-// Renders player's hand
-function renderPlayerHand(handCards) {
-    if (!playerHandEl) {
-        console.warn('[CLIENT_HAND] playerHandEl element not found.');
-        return;
-    }
-    playerHandEl.innerHTML = ''; 
-    currentHand = Array.isArray(handCards) ? handCards : []; // Ensure handCards is an array
-
-    currentHand.sort((a, b) => { // Sort cards
-        if (a.value === b.value) return a.shape.localeCompare(b.shape);
-        return a.value - b.value;
-    });
-
-    if (currentHand.length === 0 && currentGamePhase === 'playing') {
-        playerHandEl.innerHTML = '<p class="text-center text-gray-400">Your hand is empty!</p>';
-    } else if (currentHand.length === 0 && (currentGamePhase === 'waiting' || currentGamePhase === 'loading')) {
-         playerHandEl.innerHTML = '<p class="text-center text-gray-400">Waiting for game to start...</p>';
-    }
-
-
-    currentHand.forEach(card => {
-        if (typeof card.card_id === 'undefined' || typeof card.value === 'undefined' || typeof card.shape === 'undefined') {
-            console.warn('[CLIENT_HAND] Invalid card object received:', card);
-            return; // Skip rendering this invalid card
-        }
-        const cardElement = document.createElement('div');
-        cardElement.className = 'card hand-card';
-        cardElement.dataset.cardId = card.card_id;
-        cardElement.dataset.value = card.value;
-        cardElement.dataset.shape = card.shape;
-
-        const valueMap = { 1: 'A', 11: 'J', 12: 'Q', 13: 'K' };
-        const displayValue = valueMap[card.value] || card.value.toString();
-        const shapeSymbols = { 'hearts': '♥', 'diamonds': '♦', 'clubs': '♣', 'spades': '♠' };
-        const displayShape = shapeSymbols[card.shape.toLowerCase()] || card.shape.charAt(0).toUpperCase();
+// /public/js/game.js
+class GameClient {
+    constructor() {
+        this.socket = null;
+        this.gameId = null;
+        this.isConnected = false;
+        this.reconnectAttempts = 0;
+        this.maxReconnectAttempts = 5;
+        this.reconnectDelay = 1000;
+        this.selectedCards = new Set();
+        this.gameState = null;
         
-        cardElement.textContent = `${displayValue}${displayShape}`;
-        if (['hearts', 'diamonds'].includes(card.shape.toLowerCase())) {
-            cardElement.classList.add('red-card');
-        }
-
-        cardElement.addEventListener('click', () => {
-            if (isMyTurn && currentGamePhase === 'playing') {
-                cardElement.classList.toggle('selected');
-            } else if (currentGamePhase !== 'playing') {
-                logGameAction("Game is not currently in play.", "info");
-            } else {
-                logGameAction("It's not your turn to select cards.", "info");
-            }
-        });
-        playerHandEl.appendChild(cardElement);
-    });
-}
-
-// Updates player list display
-function updatePlayerListDisplay(players, myPos, currentTurnPos) {
-    if (!playerListEl) {
-        console.warn('[CLIENT_PLAYERS] playerListEl element not found.');
-        return;
+        this.init();
     }
-    playerListEl.innerHTML = '';
-    const safePlayers = Array.isArray(players) ? players : [];
 
-    safePlayers.sort((a,b) => a.position - b.position).forEach(player => {
-        if (typeof player.position === 'undefined' || !player.username) {
-            console.warn('[CLIENT_PLAYERS] Invalid player object in list:', player);
-            return; // Skip invalid player object
-        }
-        const playerDiv = document.createElement('div');
-        playerDiv.className = 'player-info-item'; // Make sure this class is defined in your CSS
-        if (player.position === myPos) {
-            playerDiv.classList.add('current-user-player');
-        }
-        if (player.position === currentTurnPos && currentGamePhase === 'playing') {
-            playerDiv.classList.add('active-turn-player');
-        }
-        playerDiv.innerHTML = `
-            <span class="player-name">${escapeHtml(player.username)} (P${player.position + 1})</span>
-            <span class="card-count">${player.card_count} card${player.card_count === 1 ? '' : 's'}</span>
-            ${(player.position === currentTurnPos && currentGamePhase === 'playing') ? '<span class="turn-indicator">YOUR TURN</span>' : ''}
-        `;
-        playerListEl.appendChild(playerDiv);
-    });
-}
-
-// Socket Connection Event Handlers
-socket.on('connect', () => {
-    console.log('[CLIENT] Connected to game server. Socket ID:', socket.id);
-    appendChatMessage({ content: 'Connected to game server.', username: "System" });
-    if (gameId) {
-        socket.emit('game:join-room', { gameId }, (response) => {
-            if (response?.error) {
-                console.error('[CLIENT] Error joining game room:', response.error);
-                appendChatMessage({ content: `Error joining game: ${response.error}`, username: 'System' });
-                if (gameStatusEl) gameStatusEl.textContent = `Error: ${response.error}`;
-                currentGamePhase = 'error';
-            } else {
-                console.log('[CLIENT] Successfully joined game room:', gameId);
-                socket.emit('game:loadMessages', { gameId }); 
-            }
-        });
-    } else {
-        console.error('[CLIENT] gameId is not defined. Cannot join room.');
-        if (gameStatusEl) gameStatusEl.textContent = "Error: Game ID missing.";
-        currentGamePhase = 'error';
+    init() {
+        this.gameId = this.extractGameIdFromUrl();
+        this.initializeSocket();
+        this.setupEventListeners();
+        this.setupUIElements();
     }
-});
 
-socket.on('disconnect', (reason) => {
-    console.log('[CLIENT] Disconnected from game server:', reason);
-    appendChatMessage({ content: `Disconnected: ${reason}. Attempting to reconnect...`, username: 'System' });
-    if (gameStatusEl) gameStatusEl.textContent = "Connection lost. Reconnecting...";
-    currentGamePhase = 'loading';
-    if(playerHandEl) playerHandEl.innerHTML = '<p class="text-center text-gray-400">Reconnecting...</p>';
-    if(playerListEl) playerListEl.innerHTML = '';
-    if(playForm) playForm.style.display = 'none';
-    if(callBSBtn) callBSBtn.style.display = 'none';
-    if(startGameBtn) startGameBtn.style.display = 'none';
-});
-
-socket.on('connect_error', (error) => {
-    console.error('[CLIENT] Connection Error:', error);
-    appendChatMessage({ content: `Connection Error: ${error.message}`, username: 'System' });
-    if (gameStatusEl) gameStatusEl.textContent = "Could not connect to server.";
-    currentGamePhase = 'error';
-});
-
-// Core Game State Update Handler
-socket.on('game:stateUpdate', (state) => {
-    try {
-        console.log('%c[CLIENT] Received game:stateUpdate:', 'color: blue; font-weight: bold;', JSON.parse(JSON.stringify(state || {})));
-
-        if (!state || !state.gameState || !state.players || typeof state.gameId === 'undefined') {
-            console.error('[CLIENT] Invalid or incomplete state received in game:stateUpdate. Aborting update.', state);
-            if (gameStatusEl) gameStatusEl.textContent = "Error: Received corrupt game data.";
-            currentGamePhase = 'error';
-            return;
-        }
-        if (state.gameId !== gameId) {
-            console.warn(`[CLIENT] Received state for wrong gameId (expected ${gameId}, got ${state.gameId}). Ignoring.`);
-            return;
-        }
-
-        myPlayerPosition = typeof state.yourPosition === 'number' ? state.yourPosition : -1;
-        currentGamePhase = state.gameState.state || 'error';
-        isMyTurn = state.currentTurnPosition === myPlayerPosition && currentGamePhase === 'playing';
-
-        if (state.hand && myPlayerPosition !== -1) {
-            renderPlayerHand(state.hand);
-        } else if (myPlayerPosition === -1 && state.hand && Array.isArray(state.hand) && state.hand.length > 0){
-             console.warn("[CLIENT] Received hand data but player position (yourPosition) is unknown or invalid. Hand not rendered.");
-        } else if (!state.hand && myPlayerPosition !== -1 && currentGamePhase === 'playing') {
-            console.warn("[CLIENT] Expected hand data for player but not received. Rendering empty hand.");
-            renderPlayerHand([]); // Render empty if expected but not received
-        }
-
-
-        if (gameStatusEl) {
-            if (currentGamePhase === 'waiting') {
-                gameStatusEl.textContent = `Waiting for players... (${state.gameState.current_num_players || 0} joined). Min 2 to start.`;
-                if(startGameBtn) startGameBtn.style.display = (state.gameState.current_num_players >= 2 && myPlayerPosition !== -1) ? 'block' : 'none';
-                if(playForm) playForm.style.display = 'none';
-                if(callBSBtn) callBSBtn.style.display = 'none';
-            } else if (currentGamePhase === 'playing') {
-                if(startGameBtn) startGameBtn.style.display = 'none';
-                if(playForm) playForm.style.display = isMyTurn ? 'flex' : 'none';
-                
-                const canCallBS = state.lastPlay && isMyTurn && myPlayerPosition !== state.lastPlay.playerPosition;
-                if(callBSBtn) callBSBtn.style.display = canCallBS ? 'block' : 'none';
-
-                const currentPlayer = state.players.find(p => p.position === state.currentTurnPosition);
-                if (currentPlayer) {
-                    gameStatusEl.textContent = isMyTurn ? "Your Turn!" : `Waiting for ${escapeHtml(currentPlayer.username)} (P${currentPlayer.position + 1})`;
-                } else {
-                    gameStatusEl.textContent = "Game in progress... (Turn unclear)";
-                }
-            } else if (currentGamePhase === 'ended') {
-                const winner = state.players.find(p => p.card_count === 0 || p.is_winner); // Check is_winner flag too
-                gameStatusEl.textContent = winner ? `Game Over! ${escapeHtml(winner.username)} (P${winner.position + 1}) wins!` : "Game Over!";
-                if(playForm) playForm.style.display = 'none';
-                if(callBSBtn) callBSBtn.style.display = 'none';
-                if(startGameBtn) startGameBtn.style.display = 'none';
-            } else if (currentGamePhase === 'error') {
-                 gameStatusEl.textContent = "Game Error. Please refresh or check logs.";
-            }
-        } else { console.warn("[CLIENT] gameStatusEl not found."); }
-
-        if (pileInfoEl) {
-            pileInfoEl.textContent = `Pile: ${state.pileCardCount || 0} card${(state.pileCardCount || 0) === 1 ? '' : 's'}`;
-        } else { console.warn("[CLIENT] pileInfoEl not found."); }
-
-        if (currentDeclarationEl) {
-            if (state.lastPlay && state.players && Array.isArray(state.players)) {
-                const playerWhoPlayed = state.players.find(p => p.position === state.lastPlay.playerPosition);
-                const declaredBy = playerWhoPlayed ? escapeHtml(playerWhoPlayed.username) : `P${state.lastPlay.playerPosition + 1}`;
-                currentDeclarationEl.textContent = `Last: ${declaredBy} declared ${state.lastPlay.cardCount} x ${escapeHtml(state.lastPlay.declaredRank)}`;
-            } else {
-                currentDeclarationEl.textContent = (currentGamePhase === 'playing') ? 'Pile is clean. Make the first play!' : 'No play yet.';
-            }
-        } else { console.warn("[CLIENT] currentDeclarationEl not found."); }
-
-        updatePlayerListDisplay(state.players, myPlayerPosition, state.currentTurnPosition);
-
-    } catch (error) {
-        console.error('[CLIENT] Error processing game:stateUpdate:', error, 'Received state was:', state);
-        if (gameStatusEl) gameStatusEl.textContent = "Client error processing game update. Check console.";
-        currentGamePhase = 'error';
+    extractGameIdFromUrl() {
+        const pathParts = window.location.pathname.split('/');
+        return pathParts[pathParts.length - 1];
     }
-});
 
-socket.on('game:newMessage', (data) => {
-    if (data.game_id === gameId) {
-        appendChatMessage(data);
-    }
-});
-
-socket.on('game:loadMessages', (messages) => {
-    if (chatMessagesList) chatMessagesList.innerHTML = '';
-    if (Array.isArray(messages)) {
-        messages.forEach(msg => appendChatMessage(msg));
-    } else {
-        console.warn("[CLIENT_CHAT] game:loadMessages received non-array data:", messages);
-    }
-});
-
-socket.on('game:actionPlayed', ({ playerPosition, username, cardCount, declaredRank }) => {
-    const playerName = username ? escapeHtml(username) : `P${playerPosition + 1}`;
-    logGameAction(`${playerName} played ${cardCount} card(s) declared as ${escapeHtml(declaredRank)}.`);
-});
-
-socket.on('game:bsResult', ({ callerPosition, callerUsername, challengedPlayerPosition, challengedUsername, wasBluff, revealedCards, pileReceiverPosition, message }) => {
-    logGameAction(message, wasBluff ? 'warning' : 'success');
-    if (revealedCards && revealedCards.length > 0) {
-        const cardsString = revealedCards.map(c => {
-            const valueMap = { 1: 'A', 11: 'J', 12: 'Q', 13: 'K' };
-            return (valueMap[c.value] || c.value.toString()) + (c.shape ? c.shape.charAt(0).toUpperCase() : '');
-        }).join(', ');
-        logGameAction(`Revealed cards from play: ${cardsString}`);
-    }
-    if (currentDeclarationEl) currentDeclarationEl.textContent = 'BS called. Pile resolved.';
-});
-
-socket.on('game:gameOver', ({ winnerPosition, winnerUsername, message}) => {
-    logGameAction(message, 'success');
-    if(gameStatusEl) gameStatusEl.textContent = message;
-    currentGamePhase = 'ended';
-    if(playForm) playForm.style.display = 'none';
-    if(callBSBtn) callBSBtn.style.display = 'none';
-    if(startGameBtn) startGameBtn.style.display = 'none';
-});
-
-
-// UI Event Listeners
-if (startGameBtn) {
-    startGameBtn.addEventListener('click', () => {
-        logGameAction('Attempting to start game...', 'info');
-        startGameBtn.disabled = true;
-        socket.emit('game:start', { gameId }, (response) => {
-            startGameBtn.disabled = false;
-            if (response?.error) {
-                console.error('[CLIENT] Error starting game:', response.error);
-                logGameAction(`Error starting game: ${response.error}`, 'error');
-                if (gameStatusEl) gameStatusEl.textContent = `Error: ${response.error}`;
-            }
-            // Success is handled by 'game:stateUpdate'
-        });
-    });
-} else { console.warn("[CLIENT] startGameBtn not found."); }
-
-if (playCardsBtn) {
-    playCardsBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        if (!isMyTurn) {
-            logGameAction("Cannot play: Not your turn.", "error");
-            return;
-        }
-        if (!playerHandEl) {
-            logGameAction("Player hand element not found.", "error");
-            return;
-        }
-        const selectedCardsElements = playerHandEl.querySelectorAll('.card.selected');
-        if (!selectedCardsElements || selectedCardsElements.length === 0) {
-            logGameAction("No cards selected.", "error");
-            return;
-        }
-        const cardsToPlayIds = Array.from(selectedCardsElements).map(el => el.dataset.cardId); // These will be strings
+    initializeSocket() {
+        console.log('[GameClient] Initializing socket connection...');
         
-        if (!declaredRankSelect) {
-            logGameAction("Declared rank select element not found.", "error");
-            return;
+        // Initialize socket with better configuration
+        this.socket = io({
+            transports: ['websocket', 'polling'],
+            upgrade: true,
+            rememberUpgrade: true,
+            timeout: 20000,
+            forceNew: false,
+            reconnection: true,
+            reconnectionAttempts: this.maxReconnectAttempts,
+            reconnectionDelay: this.reconnectDelay,
+            reconnectionDelayMax: 5000,
+            maxReconnectionAttempts: this.maxReconnectAttempts,
+            randomizationFactor: 0.5
+        });
+
+        this.setupSocketEventListeners();
+    }
+
+    setupSocketEventListeners() {
+        // Connection events
+        this.socket.on('connect', () => {
+            console.log('[GameClient] Connected to server');
+            this.isConnected = true;
+            this.reconnectAttempts = 0;
+            this.updateConnectionStatus('Connected', 'success');
+            this.joinGameRoom();
+        });
+
+        this.socket.on('disconnect', (reason) => {
+            console.log('[GameClient] Disconnected from server:', reason);
+            this.isConnected = false;
+            this.updateConnectionStatus('Disconnected', 'error');
+            
+            if (reason === 'io server disconnect') {
+                // Server disconnected the socket, try to reconnect manually
+                this.socket.connect();
+            }
+        });
+
+        this.socket.on('connect_error', (error) => {
+            console.error('[GameClient] Connection error:', error);
+            this.isConnected = false;
+            this.reconnectAttempts++;
+            this.updateConnectionStatus(`Connection error (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`, 'error');
+        });
+
+        this.socket.on('reconnect', (attemptNumber) => {
+            console.log('[GameClient] Reconnected after', attemptNumber, 'attempts');
+            this.updateConnectionStatus('Reconnected', 'success');
+            this.joinGameRoom();
+        });
+
+        this.socket.on('reconnect_error', (error) => {
+            console.error('[GameClient] Reconnection error:', error);
+        });
+
+        this.socket.on('reconnect_failed', () => {
+            console.error('[GameClient] Failed to reconnect after maximum attempts');
+            this.updateConnectionStatus('Connection failed - please refresh the page', 'error');
+        });
+
+        // Game-specific events
+        this.socket.on('game:stateUpdate', (gameState) => {
+            console.log('[GameClient] Game state update received:', gameState);
+            this.handleGameStateUpdate(gameState);
+        });
+
+        this.socket.on('game:newMessage', (message) => {
+            console.log('[GameClient] New message received:', message);
+            this.handleNewMessage(message);
+        });
+
+        this.socket.on('game:loadMessages', (messages) => {
+            console.log('[GameClient] Messages loaded:', messages.length);
+            this.handleLoadMessages(messages);
+        });
+
+        this.socket.on('game:actionPlayed', (action) => {
+            console.log('[GameClient] Action played:', action);
+            this.handleActionPlayed(action);
+        });
+
+        this.socket.on('game:bsResult', (result) => {
+            console.log('[GameClient] BS result:', result);
+            this.handleBSResult(result);
+        });
+
+        this.socket.on('game:gameOver', (gameOverData) => {
+            console.log('[GameClient] Game over:', gameOverData);
+            this.handleGameOver(gameOverData);
+        });
+    }
+
+    updateConnectionStatus(message, type) {
+        const statusElement = document.getElementById('connection-status');
+        if (!statusElement) {
+            // Create status element if it doesn't exist
+            const statusDiv = document.createElement('div');
+            statusDiv.id = 'connection-status';
+            statusDiv.className = 'connection-status';
+            document.querySelector('.game-info').prepend(statusDiv);
         }
-        const rankToDeclare = declaredRankSelect.value;
-        if (!rankToDeclare) {
-            logGameAction("Please select a rank to declare.", "error");
+        
+        const status = document.getElementById('connection-status');
+        status.textContent = message;
+        status.className = `connection-status ${type}`;
+        
+        // Auto-hide success messages after 3 seconds
+        if (type === 'success') {
+            setTimeout(() => {
+                status.style.display = 'none';
+            }, 3000);
+        } else {
+            status.style.display = 'block';
+        }
+    }
+
+    joinGameRoom() {
+        if (!this.isConnected || !this.gameId) {
+            console.error('[GameClient] Cannot join room - not connected or no game ID');
             return;
         }
 
-        playCardsBtn.disabled = true;
-        socket.emit('game:playCards', { gameId, cardsToPlayIds, declaredRank: rankToDeclare }, (response) => {
-            playCardsBtn.disabled = false;
+        console.log('[GameClient] Joining game room:', this.gameId);
+        this.socket.emit('game:join-room', { gameId: this.gameId }, (response) => {
             if (response?.error) {
-                console.error('[CLIENT] Error playing cards:', response.error);
-                logGameAction(`Error playing cards: ${response.error}`, 'error');
+                console.error('[GameClient] Error joining room:', response.error);
+                this.updateConnectionStatus(`Error joining game: ${response.error}`, 'error');
             } else {
-                // Clear selection locally for responsiveness, server will send definitive hand state
-                selectedCardsElements.forEach(el => el.classList.remove('selected'));
+                console.log('[GameClient] Successfully joined game room');
+                this.loadMessages();
             }
         });
-    });
-} else { console.warn("[CLIENT] playCardsBtn not found."); }
+    }
 
-if (callBSBtn) {
-    callBSBtn.addEventListener('click', () => {
-        if (currentGamePhase !== 'playing' || !isMyTurn) {
-            logGameAction("Cannot call BS now.", "info");
-            return;
+    setupEventListeners() {
+        // Start game button
+        const startBtn = document.getElementById('start-game-btn');
+        if (startBtn) {
+            startBtn.addEventListener('click', () => this.startGame());
         }
-        logGameAction("Calling BS...", 'info');
-        callBSBtn.disabled = true;
-        socket.emit('game:callBS', { gameId }, (response) => {
-            callBSBtn.disabled = false;
-            if (response?.error) {
-                console.error('[CLIENT] Error calling BS:', response.error);
-                logGameAction(`Error calling BS: ${response.error}`, 'error');
-            }
-        });
-    });
-} else { console.warn("[CLIENT] callBSBtn not found."); }
 
-if (chatForm) {
-    chatForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        if (!chatInput) {
-            console.warn("[CLIENT_CHAT] chatInput element not found for submit.");
-            return;
-        }
-        const message = chatInput.value.trim();
-        if (message && socket.connected) {
-            socket.emit('game:sendMessage', { gameId, message }, (ack) => {
-                if (ack?.error) {
-                    appendChatMessage({ content: `Chat send error: ${ack.error}`, username: 'System' });
-                }
+        // Play cards form
+        const playForm = document.getElementById('play-form');
+        if (playForm) {
+            playForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.playSelectedCards();
             });
-            chatInput.value = '';
-        } else if (!socket.connected) {
-            appendChatMessage({ content: 'Cannot send: Not connected.', username: 'System' });
         }
-    });
-} else { console.warn("[CLIENT_CHAT] chatForm element not found."); }
 
-window.addEventListener('beforeunload', () => {
-    if (socket.connected) {
-        socket.emit('game:leave-room', { gameId });
+        // Call BS button
+        const callBSBtn = document.getElementById('call-bs-btn');
+        if (callBSBtn) {
+            callBSBtn.addEventListener('click', () => this.callBS());
+        }
+
+        // Chat form
+        const chatForm = document.getElementById('game-chat-form');
+        if (chatForm) {
+            chatForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.sendMessage();
+            });
+        }
     }
+
+    setupUIElements() {
+        // Populate rank selector
+        this.populateRankSelector();
+    }
+
+    populateRankSelector() {
+        const rankSelect = document.getElementById('declared-rank-select');
+        if (rankSelect) {
+            const ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+            rankSelect.innerHTML = '';
+            ranks.forEach(rank => {
+                const option = document.createElement('option');
+                option.value = rank;
+                option.textContent = rank;
+                rankSelect.appendChild(option);
+            });
+        }
+    }
+
+    // Game actions
+    startGame() {
+        if (!this.isConnected) {
+            this.updateConnectionStatus('Not connected to server', 'error');
+            return;
+        }
+
+        this.socket.emit('game:start', { gameId: this.gameId }, (response) => {
+            if (response?.error) {
+                console.error('[GameClient] Error starting game:', response.error);
+                alert(`Error starting game: ${response.error}`);
+            } else {
+                console.log('[GameClient] Game started successfully');
+            }
+        });
+    }
+
+    playSelectedCards() {
+        if (!this.isConnected) {
+            this.updateConnectionStatus('Not connected to server', 'error');
+            return;
+        }
+
+        const selectedCardIds = Array.from(this.selectedCards);
+        const declaredRank = document.getElementById('declared-rank-select')?.value;
+
+        if (selectedCardIds.length === 0) {
+            alert('Please select at least one card to play.');
+            return;
+        }
+
+        if (!declaredRank) {
+            alert('Please select a declared rank.');
+            return;
+        }
+
+        this.socket.emit('game:playCards', {
+            gameId: this.gameId,
+            cardsToPlayIds: selectedCardIds,
+            declaredRank: declaredRank
+        }, (response) => {
+            if (response?.error) {
+                console.error('[GameClient] Error playing cards:', response.error);
+                alert(`Error playing cards: ${response.error}`);
+            } else {
+                console.log('[GameClient] Cards played successfully');
+                this.selectedCards.clear();
+            }
+        });
+    }
+
+    callBS() {
+        if (!this.isConnected) {
+            this.updateConnectionStatus('Not connected to server', 'error');
+            return;
+        }
+
+        this.socket.emit('game:callBS', { gameId: this.gameId }, (response) => {
+            if (response?.error) {
+                console.error('[GameClient] Error calling BS:', response.error);
+                alert(`Error calling BS: ${response.error}`);
+            } else {
+                console.log('[GameClient] BS called successfully');
+            }
+        });
+    }
+
+    sendMessage() {
+        if (!this.isConnected) {
+            this.updateConnectionStatus('Not connected to server', 'error');
+            return;
+        }
+
+        const messageInput = document.getElementById('game-chat-input');
+        const message = messageInput?.value?.trim();
+
+        if (!message) {
+            return;
+        }
+
+        this.socket.emit('game:sendMessage', {
+            gameId: this.gameId,
+            message: message
+        }, (response) => {
+            if (response?.error) {
+                console.error('[GameClient] Error sending message:', response.error);
+            } else {
+                messageInput.value = '';
+            }
+        });
+    }
+
+    loadMessages() {
+        if (!this.isConnected) {
+            return;
+        }
+
+        this.socket.emit('game:loadMessages', { gameId: this.gameId }, (response) => {
+            if (response?.error) {
+                console.error('[GameClient] Error loading messages:', response.error);
+            }
+        });
+    }
+
+    // Event handlers
+    handleGameStateUpdate(gameState) {
+        this.gameState = gameState;
+        this.updateGameInfo(gameState);
+        this.updatePlayerList(gameState.players);
+        this.updatePlayerHand(gameState.hand);
+        this.updateGameActions(gameState);
+        this.updatePileInfo(gameState);
+    }
+
+    updateGameInfo(gameState) {
+        const statusElement = document.getElementById('game-status');
+        if (statusElement) {
+            const state = gameState.gameState.state;
+            const playerCount = gameState.gameState.current_num_players;
+            statusElement.textContent = `Status: ${state} | Players: ${playerCount}`;
+        }
+    }
+
+    updatePlayerList(players) {
+        const playerListElement = document.getElementById('player-list-display');
+        if (!playerListElement) return;
+
+        playerListElement.innerHTML = '';
+        players.forEach(player => {
+            const playerDiv = document.createElement('div');
+            playerDiv.className = 'player-item p-2 bg-gray-700 rounded';
+            
+            let statusText = '';
+            if (player.isWinner) {
+                statusText = ' 👑 WINNER';
+            } else if (player.isCurrentTurn) {
+                statusText = ' 🎯 TURN';
+            }
+
+            playerDiv.innerHTML = `
+                <div class="player-name font-medium">${player.username} (P${player.position + 1})</div>
+                <div class="player-cards text-sm text-gray-300">Cards: ${player.card_count}${statusText}</div>
+            `;
+            
+            if (player.isCurrentTurn) {
+                playerDiv.classList.add('border-2', 'border-blue-500');
+            }
+            
+            playerListElement.appendChild(playerDiv);
+        });
+    }
+
+    updatePlayerHand(hand) {
+        const handElement = document.getElementById('player-hand');
+        if (!handElement || !hand) return;
+
+        handElement.innerHTML = '';
+        hand.forEach(card => {
+            const cardElement = document.createElement('div');
+            cardElement.className = 'card';
+            cardElement.dataset.cardId = card.card_id;
+            
+            const displayValue = card.value === 1 ? 'A' : 
+                               card.value === 11 ? 'J' : 
+                               card.value === 12 ? 'Q' : 
+                               card.value === 13 ? 'K' : 
+                               card.value.toString();
+            
+            const suitSymbol = {
+                'hearts': '♥️',
+                'diamonds': '♦️',
+                'clubs': '♣️',
+                'spades': '♠️'
+            }[card.shape] || '?';
+
+            cardElement.innerHTML = `
+                <div class="card-content">
+                    <span class="card-value">${displayValue}</span>
+                    <span class="card-suit">${suitSymbol}</span>
+                </div>
+            `;
+
+            cardElement.addEventListener('click', () => this.toggleCardSelection(card.card_id, cardElement));
+            handElement.appendChild(cardElement);
+        });
+    }
+
+    toggleCardSelection(cardId, cardElement) {
+        if (this.selectedCards.has(cardId)) {
+            this.selectedCards.delete(cardId);
+            cardElement.classList.remove('selected');
+        } else {
+            this.selectedCards.add(cardId);
+            cardElement.classList.add('selected');
+        }
+    }
+
+    updateGameActions(gameState) {
+        const actionsContainer = document.getElementById('game-actions-container');
+        const playForm = document.getElementById('play-form');
+        const callBSBtn = document.getElementById('call-bs-btn');
+        const startBtn = document.getElementById('start-game-btn');
+
+        if (!actionsContainer) return;
+
+        const isPlaying = gameState.gameState.state === 'playing';
+        const isMyTurn = gameState.players.some(p => p.isCurrentTurn && p.position === gameState.yourPosition);
+        const hasLastPlay = gameState.lastPlay !== null;
+
+        // Show/hide start button
+        if (startBtn) {
+            startBtn.style.display = isPlaying ? 'none' : 'block';
+        }
+
+        // Show/hide actions container
+        actionsContainer.style.display = isPlaying ? 'block' : 'none';
+
+        // Show/hide play form and BS button
+        if (playForm && callBSBtn) {
+            if (isMyTurn) {
+                if (hasLastPlay) {
+                    // Can either play cards or call BS
+                    playForm.style.display = 'block';
+                    callBSBtn.style.display = 'block';
+                } else {
+                    // First play of the game, can only play cards
+                    playForm.style.display = 'block';
+                    callBSBtn.style.display = 'none';
+                }
+            } else {
+                // Not my turn
+                playForm.style.display = 'none';
+                callBSBtn.style.display = 'none';
+            }
+        }
+    }
+
+    updatePileInfo(gameState) {
+        const pileInfoElement = document.getElementById('pile-info');
+        const declarationElement = document.getElementById('current-declaration');
+
+        if (pileInfoElement) {
+            pileInfoElement.textContent = `Pile: ${gameState.pileCardCount} cards`;
+        }
+
+        if (declarationElement) {
+            if (gameState.lastPlay) {
+                const playerName = gameState.players.find(p => p.position === gameState.lastPlay.playerPosition)?.username || 'Unknown';
+                declarationElement.textContent = `Last play: ${playerName} played ${gameState.lastPlay.cardCount} ${gameState.lastPlay.declaredRank}(s)`;
+            } else {
+                declarationElement.textContent = 'No play has been made yet.';
+            }
+        }
+    }
+
+    handleNewMessage(message) {
+        const chatMessages = document.getElementById('game-chat-messages');
+        if (!chatMessages) return;
+
+        const messageElement = document.createElement('li');
+        messageElement.className = 'chat-message';
+        
+        const timestamp = new Date(message.created_at).toLocaleTimeString();
+        messageElement.innerHTML = `
+            <div class="message-header text-xs text-gray-400">${message.username} - ${timestamp}</div>
+            <div class="message-content">${this.escapeHtml(message.content)}</div>
+        `;
+
+        chatMessages.appendChild(messageElement);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    handleLoadMessages(messages) {
+        const chatMessages = document.getElementById('game-chat-messages');
+        if (!chatMessages) return;
+
+        chatMessages.innerHTML = '';
+        messages.forEach(message => this.handleNewMessage(message));
+    }
+
+    handleActionPlayed(action) {
+        this.addGameLogEntry(`${action.username} played ${action.cardCount} card(s) as ${action.declaredRank}(s)`);
+    }
+
+    handleBSResult(result) {
+        const resultText = result.wasBluff 
+            ? `${result.callerUsername} correctly called BS! ${result.challengedUsername} was bluffing.`
+            : `${result.callerUsername} called BS, but ${result.challengedUsername} was NOT bluffing!`;
+        
+        this.addGameLogEntry(resultText);
+    }
+
+    handleGameOver(gameOverData) {
+        this.addGameLogEntry(`🎉 GAME OVER! ${gameOverData.message}`);
+        
+        // Disable game actions
+        const actionsContainer = document.getElementById('game-actions-container');
+        if (actionsContainer) {
+            actionsContainer.style.display = 'none';
+        }
+    }
+
+    addGameLogEntry(message) {
+        const gameLog = document.getElementById('game-log');
+        if (!gameLog) return;
+
+        const logEntry = document.createElement('div');
+        logEntry.className = 'log-entry text-sm mb-1';
+        logEntry.textContent = `${new Date().toLocaleTimeString()} - ${message}`;
+        
+        gameLog.appendChild(logEntry);
+        gameLog.scrollTop = gameLog.scrollHeight;
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+}
+
+// Initialize the game client when the page loads
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('[GameClient] DOM loaded, initializing game client...');
+    window.gameClient = new GameClient();
 });
-
-if (declaredRankSelect) {
-    const ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-    ranks.forEach(rank => {
-        const option = document.createElement('option');
-        option.value = rank;
-        option.textContent = rank;
-        declaredRankSelect.appendChild(option);
-    });
-} else { console.warn("[CLIENT] declaredRankSelect element not found."); }
-
-// Initial UI state
-if(gameStatusEl) gameStatusEl.textContent = "Connecting to game...";
-if(playForm) playForm.style.display = 'none';
-if(callBSBtn) callBSBtn.style.display = 'none';
-if(startGameBtn) startGameBtn.style.display = 'none';
-if(playerHandEl) playerHandEl.innerHTML = '<p class="text-center text-gray-400">Loading hand...</p>';
-if(playerListEl) playerListEl.innerHTML = '<p class="text-center text-gray-400">Loading players...</p>';
-
-console.log(`[CLIENT] Game ID: ${gameId} - Client script initialized.`);
-
