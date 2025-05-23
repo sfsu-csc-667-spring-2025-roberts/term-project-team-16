@@ -1,13 +1,16 @@
-<nav>
-  <ul>
-    <li><a href="/">Home</a></li>
-    <% if (locals.userId) { %>
-      <li>Welcome, <%= locals.username %>!</li>
-      <li><a href="/auth/logout">Logout</a></li>
-    <% } else { %>
-      <li><a href="/auth/login">Login</a></li>
-      <li><a href="/auth/register">Register</a></li>
-    <% } %>
-  </ul>
+<nav class="navbar">
+  <div class="navbar-container">
+    <ul class="navbar-links">
+      <li class="navbar-item"><a href="/" class="navbar-logo">Home</a></li>
+      <% if (locals.userId) { %>
+        <li class="navbar-item">Logged in as <strong><%= locals.username %></strong></li>
+        <li class="navbar-item"><a href="/settings">Settings</a></li>
+        <li class="navbar-item"><a href="/auth/logout">Logout</a></li>
+      <% } else { %>
+        <li class="navbar-item"><a href="/auth/login">Login</a></li>
+        <li class="navbar-item"><a href="/auth/register">Register</a></li>
+      <% } %>
+    </ul>
+  </div>
 </nav>
-<hr/>
+<hr class="navbar-divider"/>

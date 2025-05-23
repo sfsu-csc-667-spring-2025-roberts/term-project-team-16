@@ -1,13 +1,11 @@
 html, body {
-    background: #191c1f;
+    font-family: 'Inter', sans-serif;
     margin: 0;
     padding: 0;
-    min-height: 100vh;
 }
 
 .settings-container {
     min-height: 100vh;
-    background: #191c1f;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -15,8 +13,8 @@ html, body {
 }
 
 .settings-form {
-    background: #222428;
-    border-radius: 10px;
+    background: #ffffff;
+    border-radius: 30px;
     box-shadow: 0 4px 24px rgba(0,0,0,0.10);
     padding: 2.5rem 2rem 2rem 2rem;
     width: 350px;
@@ -27,7 +25,7 @@ html, body {
 }
 
 .settings-title {
-    color: #fff;
+    color: #000000;
     text-align: center;
     font-size: 2rem;
     font-weight: 700;
@@ -36,7 +34,7 @@ html, body {
 }
 
 .settings-form label {
-    color: #fff;
+    color: #000000;
     font-size: 1rem;
     font-weight: 500;
 }
@@ -44,9 +42,9 @@ html, body {
 .settings-form input {
     padding: 0.6rem 0.75rem;
     border-radius: 5px;
-    border: 1px solid #444;
-    background: #191c1f;
-    color: #fff;
+    border: 2px solid #e2e8f0;
+    background: #f8fafc;
+    color: #000000;
     font-size: 1rem;
     margin-bottom: 0.5rem;
     outline: none;
@@ -59,7 +57,7 @@ html, body {
 
 .btn.primary {
     background-color: #007bff;
-    color: #fff;
+    color: #000000;
     border: none;
     border-radius: 6px;
     padding: 0.8rem;

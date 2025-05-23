@@ -218,11 +218,6 @@ class GameClient {
                 <div class="pending-win-content bg-yellow-600 text-white p-4 rounded-lg mb-4">
                     <div class="pending-win-message font-bold text-lg mb-2"></div>
                     <div class="pending-win-timer text-2xl font-mono"></div>
-                    <div class="pending-win-actions mt-3">
-                        <button id="pending-bs-btn" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded font-bold">
-                            Call BS!
-                        </button>
-                    </div>
                 </div>
             `;
             

@@ -4,11 +4,21 @@
     <meta charset="UTF-8">
     <title>BS Card Game - Game <%= gameId %></title> 
     <link rel="stylesheet" href="/css/game.css">
+    <link rel="stylesheet" href="/css/header.css">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body>
-    <%- include("shared/header") %>
-
+    <nav class="navbar">
+        <div class="navbar-container">
+          <ul class="navbar-links">
+            <li class="navbar-item"><a href="/" class="navbar-logo">Home</a></li>
+            <li class="navbar-item">Logged in as <strong><%= locals.username %></strong></li>
+            <li class="navbar-item"><a href="/settings">Settings</a></li>
+            <li class="navbar-item"><a href="/auth/logout">Logout</a></li>
+          </ul>
+        </div>
+      </nav>
+      <hr class="navbar-divider"/>
     <div class="game-container">
         <div class="main-game-area">
             <div class="game-info">
@@ -30,15 +40,19 @@
             <div id="game-actions-container" class="action-section my-4 p-4 bg-gray-800 rounded-lg shadow-md" style="display: none;">
                 <form id="play-form" autocomplete="off" class="flex flex-col items-center gap-3" style="display: none;">
                     <div>
-                        <label for="declared-rank-select" class="block mb-1 text-sm font-medium text-gray-300">Declare selected cards as:</label>
+                        <label for="declared-rank-select" class="block mb-1 text-sm font-medium text-gray-300">
+                            Declare selected cards as:
+                        </label>
                         <select id="declared-rank-select">
-                            <!-- Options will be populated by JavaScript -->
+                            <!-- Options populated by JS -->
                         </select>
                     </div>
-                    <button id="play-cards-btn" class="btn primary w-full" type="submit">Play Selected Cards</button>
-                </form>
-
-                <button id="call-bs-btn" class="btn bs w-full mt-2">Call BS!</button>
+                
+                    <div class="game-buttons">
+                        <button id="play-cards-btn" class="btn primary" type="submit">Play Selected Cards</button>
+                        <button id="call-bs-btn" class="btn bs red-alert" type="button">🚨 Call BS!</button>
+                    </div>                                           
+                </form>                
             </div>
 
             <div id="game-log" class="game-log mt-4 p-3 bg-gray-800 rounded-lg shadow-md h-40 overflow-y-auto text-sm">
