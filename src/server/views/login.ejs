@@ -6,8 +6,10 @@
     <title>Login</title>
     <link rel="stylesheet" href="/css/main.css">
     <link rel="stylesheet" href="/css/auth.css">
+    <link rel="stylesheet" href="/css/header.css">
 </head>
 <body>
+    <%- include("shared/header") %>
     <div class="auth-container">
         <form class="auth-form" action="/auth/login" method="POST">
             <div class="auth-title">Sign in to your account</div>
@@ -15,10 +17,10 @@
                 <div class="auth-error"><%= error %></div>
             <% } %>
             <label for="usernameOrEmail">Username or Email</label>
-            <input type="text" id="usernameOrEmail" name="usernameOrEmail" required autocomplete="username">
+            <input type="text" id="usernameOrEmail" name="usernameOrEmail" required autocomplete="username" placeholder="example@sfsu.edu or ex.user">
 
             <label for="password">Password</label>
-            <input type="password" id="password" name="password" required autocomplete="current-password">
+            <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="Enter your password">
 
             <button class="auth-btn" type="submit">Login</button>
             <div class="auth-alt">

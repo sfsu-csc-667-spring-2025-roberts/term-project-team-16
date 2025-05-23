@@ -242,7 +242,7 @@ nav ul li {
 
 nav ul li a {
   text-decoration: none;
-  color: var(--text-primary);
+  color: aliceblue;
   font-weight: 500;
   padding: var(--spacing-sm) var(--spacing-md);
   border-radius: var(--radius-md);

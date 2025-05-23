@@ -288,6 +288,14 @@ html, body {
   background: linear-gradient(90deg, var(--warning-color) 0%, var(--danger-color) 100%);
 }
 
+.game-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 9rem; /* Adds spacing between buttons */
+  margin-top: 2rem; /* Optional: adds space from above */
+  flex-wrap: wrap;
+}
+
 #play-form {
   display: flex;
   flex-direction: column;
@@ -381,6 +389,7 @@ html, body {
   color: var(--text-primary);
   font-weight: 700;
   animation: pulse-danger 2s infinite;
+  margin-top: 2rem;
 }
 
 @keyframes pulse-danger {
@@ -401,6 +410,20 @@ html, body {
   transform: none !important;
   box-shadow: var(--shadow-sm) !important;
   animation: none !important;
+}
+
+.btn.bs,
+#call-bs-btn,
+.btn.red-alert {
+  background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
+  color: #fff;
+  font-weight: 700;
+  animation: pulse-danger 2s infinite;
+}
+
+@keyframes pulse-warning {
+  0%, 100% { box-shadow: var(--shadow-md); }
+  50% { box-shadow: var(--shadow-lg), 0 0 25px rgba(251, 191, 36, 0.6); }
 }
 
 /* Game Log */
