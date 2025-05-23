@@ -1,40 +1,37 @@
-// src/server/index.ts (or your main server file)
+// src/server/index.ts - Simplified version (keeps optimizations, removes complexity)
 import dotenv from "dotenv";
-dotenv.config(); // Load environment variables at the very top
-
+dotenv.config();
 import cookieParser from "cookie-parser";
-import express, { Request, Response, NextFunction } from "express"; // Added Request, Response, NextFunction for error handler typing
+import express, { Request, Response, NextFunction } from "express";
 import http from "http";
-import httpErrors, { HttpError } from "http-errors"; // Added HttpError for typing
+import httpErrors, { HttpError } from "http-errors";
 import morgan from "morgan";
 import { Server as IOServer } from "socket.io";
 import * as path from "path";
-
-// Your existing imports
-import { rootRoutes, authRoutes, gameRoutes } from "./routes"; // Assuming this imports { rootRoutes, authRoutes }
-import { sessionMiddleware } from "./middleware/session"; // Assuming this is your configured express-session
+import { rootRoutes, authRoutes, gameRoutes } from "./routes";
+import { sessionMiddleware } from "./middleware/session";
 import { configureSockets } from "./config/socket";
-import initializeDatabase from "./db/init"; // Import database initializer
-import pool from './config/database'; // Import your database pool if sessionMiddleware needs it directly
+import initializeDatabase from "./db/init";
+import pool from './config/database';
 
 const app = express();
 const server = http.createServer(app);
 
-// Middleware setup (before socket.io)
+// middleware
 app.use(morgan("dev"));
 app.use(express.json());
-app.use(express.urlencoded({ extended: false })); // or true if you need richer objects
+app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(sessionMiddleware);
 
-// Static files serving
+// static files
 app.use(express.static(path.join(process.cwd(), "src", "public")));
 app.use(
-  "/client", // Serves client-side specific build files if any (e.g., bundled JS)
-  express.static(path.join(process.cwd(), "src", "client"))
+  "/client",
+  express.static(path.join(process.cwd(), "src", "client"))
 );
 
-// Initialize Socket.IO with proper configuration
+//  Socket.IO with optimized settings
 const io = new IOServer(server, {
     path: '/socket.io',
     transports: ['websocket', 'polling'],
@@ -43,32 +40,34 @@ const io = new IOServer(server, {
         methods: ['GET', 'POST'],
         credentials: true
     },
-    pingInterval: 10000,
-    pingTimeout: 5000
+    // timeouts
+    pingInterval: 25000,
+    pingTimeout: 20000,
 });
 
-// Configure socket handlers with session middleware
+//  socket handlers 
 configureSockets(io, sessionMiddleware);
 
-app.set('io', io); // Store io instance for route access
-// Set view engine
+// this really slows down entering the game view because it connects all our sockets to everywhere, maybe remove it, but it lets you see game creation in real time
+app.set('io', io);
 
+// views
 app.set("views", path.join(process.cwd(), "src", "server", "views"));
 app.set("view engine", "ejs");
 
-// Routes setup
+// routes
 app.use("/", rootRoutes);
 app.use("/auth", authRoutes);
-app.use("/games", gameRoutes); // Your game routes
+app.use("/games", gameRoutes);
 
-// 404 handler
+// 404 handler 
 app.use((req: Request, res: Response, next: NextFunction) => {
   const err = new Error("Not Found");
   (err as any).status = 404;
   next(err);
 });
 
-// error handler
+// Error handler 
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   res.status(err.status || 500);
   res.render("error", {
@@ -79,7 +78,7 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
 
 const PORT = process.env.PORT || 3000;
 
-// Initialize Database and start server
+// init db then start server
 initializeDatabase().then(() => {
     console.log('Database initialized successfully');
     
@@ -91,15 +90,12 @@ initializeDatabase().then(() => {
     process.exit(1);
 });
 
-
-// Augment Express Session types
+// I really wish I knew much about the built in express session before this project...
 declare module 'express-session' {
   interface SessionData {
     userId?: number;
     username?: string;
     email?: string;
-    returnTo?: string; // For redirecting after login
-    // Add any other custom session properties here
+    returnTo?: string;
   }
 }
-

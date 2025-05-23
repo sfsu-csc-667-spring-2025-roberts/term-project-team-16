@@ -1,4 +1,5 @@
-// /public/js/game.js
+// Updated game.js client with simplified card play (no declaration dropdown)
+
 class GameClient {
     constructor() {
         this.socket = null;
@@ -10,6 +11,7 @@ class GameClient {
         this.selectedCards = new Set();
         this.gameState = null;
         this.pendingWinTimer = null;
+        this.lastStateUpdate = 0;
         
         this.init();
     }
@@ -29,7 +31,6 @@ class GameClient {
     initializeSocket() {
         console.log('[GameClient] Initializing socket connection...');
         
-        // Initialize socket with better configuration
         this.socket = io({
             transports: ['websocket', 'polling'],
             upgrade: true,
@@ -48,7 +49,7 @@ class GameClient {
     }
 
     setupSocketEventListeners() {
-        // Connection events
+        // Connection events (keep existing)
         this.socket.on('connect', () => {
             console.log('[GameClient] Connected to server');
             this.isConnected = true;
@@ -63,7 +64,6 @@ class GameClient {
             this.updateConnectionStatus('Disconnected', 'error');
             
             if (reason === 'io server disconnect') {
-                // Server disconnected the socket, try to reconnect manually
                 this.socket.connect();
             }
         });
@@ -81,48 +81,42 @@ class GameClient {
             this.joinGameRoom();
         });
 
-        this.socket.on('reconnect_error', (error) => {
-            console.error('[GameClient] Reconnection error:', error);
-        });
-
         this.socket.on('reconnect_failed', () => {
             console.error('[GameClient] Failed to reconnect after maximum attempts');
             this.updateConnectionStatus('Connection failed - please refresh the page', 'error');
         });
 
-        // Game-specific events
+        // Game events with throttling
         this.socket.on('game:stateUpdate', (gameState) => {
+            const now = Date.now();
+            if (now - this.lastStateUpdate < 100) return;
+            this.lastStateUpdate = now;
+            
             console.log('[GameClient] Game state update received:', gameState);
             this.handleGameStateUpdate(gameState);
         });
 
         this.socket.on('game:newMessage', (message) => {
-            console.log('[GameClient] New message received:', message);
             this.handleNewMessage(message);
         });
 
         this.socket.on('game:loadMessages', (messages) => {
-            console.log('[GameClient] Messages loaded:', messages.length);
             this.handleLoadMessages(messages);
         });
 
         this.socket.on('game:actionPlayed', (action) => {
-            console.log('[GameClient] Action played:', action);
             this.handleActionPlayed(action);
         });
 
         this.socket.on('game:bsResult', (result) => {
-            console.log('[GameClient] BS result:', result);
             this.handleBSResult(result);
         });
 
         this.socket.on('game:gameOver', (gameOverData) => {
-            console.log('[GameClient] Game over:', gameOverData);
             this.handleGameOver(gameOverData);
         });
 
         this.socket.on('game:pendingWin', (pendingWinData) => {
-            console.log('[GameClient] Pending win:', pendingWinData);
             this.handlePendingWin(pendingWinData);
         });
     }
@@ -130,7 +124,6 @@ class GameClient {
     updateConnectionStatus(message, type) {
         const statusElement = document.getElementById('connection-status');
         if (!statusElement) {
-            // Create status element if it doesn't exist
             const statusDiv = document.createElement('div');
             statusDiv.id = 'connection-status';
             statusDiv.className = 'connection-status';
@@ -141,7 +134,6 @@ class GameClient {
         status.textContent = message;
         status.className = `connection-status ${type}`;
         
-        // Auto-hide success messages after 3 seconds
         if (type === 'success') {
             setTimeout(() => {
                 status.style.display = 'none';
@@ -157,7 +149,6 @@ class GameClient {
             return;
         }
 
-        console.log('[GameClient] Joining game room:', this.gameId);
         this.socket.emit('game:join-room', { gameId: this.gameId }, (response) => {
             if (response?.error) {
                 console.error('[GameClient] Error joining room:', response.error);
@@ -176,7 +167,7 @@ class GameClient {
             startBtn.addEventListener('click', () => this.startGame());
         }
 
-        // Play cards form
+        // Simplified play cards form (no declaration dropdown)
         const playForm = document.getElementById('play-form');
         if (playForm) {
             playForm.addEventListener('submit', (e) => {
@@ -202,11 +193,41 @@ class GameClient {
     }
 
     setupUIElements() {
-        // Populate rank selector
-        this.populateRankSelector();
-        
-        // Create pending win display if it doesn't exist
+        this.populateRankSelector(); // Keep the rank selector
         this.createPendingWinDisplay();
+        this.createRequiredRankDisplay();
+    }
+
+    populateRankSelector() {
+        const rankSelect = document.getElementById('declared-rank-select');
+        if (rankSelect) {
+            const ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+            rankSelect.innerHTML = '';
+            ranks.forEach(rank => {
+                const option = document.createElement('option');
+                option.value = rank;
+                option.textContent = rank;
+                rankSelect.appendChild(option);
+            });
+        }
+    }
+
+    createRequiredRankDisplay() {
+        // Create display for what rank is required
+        if (!document.getElementById('required-rank-display')) {
+            const requiredRankDiv = document.createElement('div');
+            requiredRankDiv.id = 'required-rank-display';
+            requiredRankDiv.className = 'required-rank-display bg-blue-600 text-white p-3 rounded-lg mb-4 text-center';
+            requiredRankDiv.innerHTML = `
+                <div class="text-sm font-medium">Next Required Rank:</div>
+                <div class="text-2xl font-bold" id="required-rank-value">A</div>
+            `;
+            
+            const gameInfo = document.querySelector('.game-info');
+            if (gameInfo) {
+                gameInfo.appendChild(requiredRankDiv);
+            }
+        }
     }
 
     createPendingWinDisplay() {
@@ -225,26 +246,6 @@ class GameClient {
             if (gameInfo) {
                 gameInfo.appendChild(pendingWinDiv);
             }
-            
-            // Add event listener for pending BS button
-            const pendingBSBtn = document.getElementById('pending-bs-btn');
-            if (pendingBSBtn) {
-                pendingBSBtn.addEventListener('click', () => this.callBS());
-            }
-        }
-    }
-
-    populateRankSelector() {
-        const rankSelect = document.getElementById('declared-rank-select');
-        if (rankSelect) {
-            const ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-            rankSelect.innerHTML = '';
-            ranks.forEach(rank => {
-                const option = document.createElement('option');
-                option.value = rank;
-                option.textContent = rank;
-                rankSelect.appendChild(option);
-            });
         }
     }
 
@@ -259,8 +260,6 @@ class GameClient {
             if (response?.error) {
                 console.error('[GameClient] Error starting game:', response.error);
                 alert(`Error starting game: ${response.error}`);
-            } else {
-                console.log('[GameClient] Game started successfully');
             }
         });
     }
@@ -272,29 +271,55 @@ class GameClient {
         }
 
         const selectedCardIds = Array.from(this.selectedCards);
-        const declaredRank = document.getElementById('declared-rank-select')?.value;
 
         if (selectedCardIds.length === 0) {
             alert('Please select at least one card to play.');
             return;
         }
 
-        if (!declaredRank) {
-            alert('Please select a declared rank.');
-            return;
+        // Check if pile is empty to determine if we need declaration
+        const pileIsEmpty = this.gameState?.pileCardCount === 0;
+        let declaredRank = null;
+
+        if (pileIsEmpty) {
+            // Pile is empty - player must choose a rank
+            declaredRank = document.getElementById('declared-rank-select')?.value;
+            if (!declaredRank) {
+                alert('Please select a declared rank.');
+                return;
+            }
         }
 
-        this.socket.emit('game:playCards', {
+        // Disable form to prevent double submission
+        const playForm = document.getElementById('play-form');
+        if (playForm) {
+            playForm.style.pointerEvents = 'none';
+            playForm.style.opacity = '0.7';
+        }
+
+        // Build request - only include declaredRank if pile is empty
+        const request = {
             gameId: this.gameId,
-            cardsToPlayIds: selectedCardIds,
-            declaredRank: declaredRank
-        }, (response) => {
+            cardsToPlayIds: selectedCardIds
+        };
+
+        if (pileIsEmpty && declaredRank) {
+            request.declaredRank = declaredRank;
+        }
+
+        this.socket.emit('game:playCards', request, (response) => {
+            // Re-enable form
+            if (playForm) {
+                playForm.style.pointerEvents = '';
+                playForm.style.opacity = '';
+            }
+
             if (response?.error) {
                 console.error('[GameClient] Error playing cards:', response.error);
                 alert(`Error playing cards: ${response.error}`);
             } else {
-                console.log('[GameClient] Cards played successfully');
                 this.selectedCards.clear();
+                this.updateSelectedCards();
             }
         });
     }
@@ -305,12 +330,21 @@ class GameClient {
             return;
         }
 
+        const callBSBtn = document.getElementById('call-bs-btn');
+        if (callBSBtn) {
+            callBSBtn.disabled = true;
+            callBSBtn.textContent = 'Calling BS...';
+        }
+
         this.socket.emit('game:callBS', { gameId: this.gameId }, (response) => {
+            if (callBSBtn) {
+                callBSBtn.disabled = false;
+                callBSBtn.textContent = '🚨 Call BS!';
+            }
+
             if (response?.error) {
                 console.error('[GameClient] Error calling BS:', response.error);
                 alert(`Error calling BS: ${response.error}`);
-            } else {
-                console.log('[GameClient] BS called successfully');
             }
         });
     }
@@ -324,9 +358,7 @@ class GameClient {
         const messageInput = document.getElementById('game-chat-input');
         const message = messageInput?.value?.trim();
 
-        if (!message) {
-            return;
-        }
+        if (!message) return;
 
         this.socket.emit('game:sendMessage', {
             gameId: this.gameId,
@@ -341,9 +373,7 @@ class GameClient {
     }
 
     loadMessages() {
-        if (!this.isConnected) {
-            return;
-        }
+        if (!this.isConnected) return;
 
         this.socket.emit('game:loadMessages', { gameId: this.gameId }, (response) => {
             if (response?.error) {
@@ -360,6 +390,7 @@ class GameClient {
         this.updatePlayerHand(gameState.hand);
         this.updateGameActions(gameState);
         this.updatePileInfo(gameState);
+        this.updateRequiredRank(gameState);
         this.updatePendingWin(gameState.pendingWin);
     }
 
@@ -375,6 +406,32 @@ class GameClient {
             }
             
             statusElement.textContent = statusText;
+        }
+    }
+
+    updateRequiredRank(gameState) {
+        const requiredRankDisplay = document.getElementById('required-rank-display');
+        const requiredRankValue = document.getElementById('required-rank-value');
+        
+        if (requiredRankDisplay && requiredRankValue) {
+            const isPlaying = gameState.gameState.state === 'playing';
+            const isMyTurn = gameState.isMyTurn;
+            const pileIsEmpty = gameState.pileCardCount === 0;
+            
+            if (isPlaying && !pileIsEmpty && gameState.requiredRank) {
+                // Show required rank when pile has cards
+                requiredRankDisplay.style.display = 'block';
+                requiredRankValue.textContent = gameState.requiredRank;
+                
+                if (isMyTurn) {
+                    requiredRankDisplay.className = 'required-rank-display bg-green-600 text-white p-3 rounded-lg mb-4 text-center animate-pulse';
+                } else {
+                    requiredRankDisplay.className = 'required-rank-display bg-blue-600 text-white p-3 rounded-lg mb-4 text-center';
+                }
+            } else {
+                // Hide when pile is empty (player chooses) or not playing
+                requiredRankDisplay.style.display = 'none';
+            }
         }
     }
 
@@ -437,9 +494,26 @@ class GameClient {
                 </div>
             `;
 
+            // Highlight cards that match the required rank
+            if (this.gameState?.requiredRank) {
+                const requiredValue = this.rankToValue(this.gameState.requiredRank);
+                if (card.value === requiredValue) {
+                    cardElement.classList.add('valid-card');
+                }
+            }
+
+            if (this.selectedCards.has(card.card_id)) {
+                cardElement.classList.add('selected');
+            }
+
             cardElement.addEventListener('click', () => this.toggleCardSelection(card.card_id, cardElement));
             handElement.appendChild(cardElement);
         });
+    }
+
+    rankToValue(rank) {
+        const rankMap = { 'A': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 11, 'Q': 12, 'K': 13 };
+        return rankMap[rank] || 1;
     }
 
     toggleCardSelection(cardId, cardElement) {
@@ -452,6 +526,18 @@ class GameClient {
         }
     }
 
+    updateSelectedCards() {
+        const cardElements = document.querySelectorAll('.card');
+        cardElements.forEach(cardEl => {
+            const cardId = parseInt(cardEl.dataset.cardId);
+            if (this.selectedCards.has(cardId)) {
+                cardEl.classList.add('selected');
+            } else {
+                cardEl.classList.remove('selected');
+            }
+        });
+    }
+
     updateGameActions(gameState) {
         const actionsContainer = document.getElementById('game-actions-container');
         const playForm = document.getElementById('play-form');
@@ -462,8 +548,9 @@ class GameClient {
 
         const isPlaying = gameState.gameState.state === 'playing';
         const isPendingWin = gameState.gameState.state === 'pending_win';
-        const isMyTurn = gameState.players.some(p => p.isCurrentTurn && p.position === gameState.yourPosition);
+        const isMyTurn = gameState.isMyTurn;
         const hasLastPlay = gameState.lastPlay !== null;
+        const pileIsEmpty = gameState.pileCardCount === 0;
 
         // Show/hide start button
         if (startBtn) {
@@ -473,26 +560,36 @@ class GameClient {
         // Show/hide actions container
         actionsContainer.style.display = (isPlaying || isPendingWin) ? 'block' : 'none';
 
+        // Control declaration dropdown based on pile state
+        const declaredRankSelect = document.getElementById('declared-rank-select');
+        const declaredRankLabel = document.querySelector('label[for="declared-rank-select"]');
+        
+        if (declaredRankSelect && declaredRankLabel) {
+            // Show dropdown only when pile is empty AND it's my turn
+            if (pileIsEmpty && isMyTurn && isPlaying && !isPendingWin) {
+                declaredRankSelect.style.display = 'block';
+                declaredRankLabel.style.display = 'block';
+                declaredRankLabel.textContent = 'Choose starting rank:';
+            } else {
+                declaredRankSelect.style.display = 'none';
+                declaredRankLabel.style.display = 'none';
+            }
+        }
+
         // Show/hide play form and BS button
         if (playForm && callBSBtn) {
             if (isPendingWin) {
-                // During pending win, only show BS button (for non-winner players)
                 playForm.style.display = 'none';
                 const pendingWin = gameState.pendingWin;
                 const isWinningPlayer = pendingWin && pendingWin.playerPosition === gameState.yourPosition;
                 callBSBtn.style.display = (!isWinningPlayer && hasLastPlay) ? 'block' : 'none';
-            } else if (isMyTurn) {
-                if (hasLastPlay) {
-                    // Can either play cards or call BS
-                    playForm.style.display = 'block';
-                    callBSBtn.style.display = 'block';
-                } else {
-                    // First play of the game, can only play cards
-                    playForm.style.display = 'block';
-                    callBSBtn.style.display = 'none';
-                }
+            } else if (isMyTurn && isPlaying) {
+                playForm.style.display = 'block';
+                callBSBtn.style.display = hasLastPlay ? 'block' : 'none';
+            } else if (isPlaying && hasLastPlay) {
+                playForm.style.display = 'none';
+                callBSBtn.style.display = 'block';
             } else {
-                // Not my turn
                 playForm.style.display = 'none';
                 callBSBtn.style.display = 'none';
             }
@@ -526,12 +623,10 @@ class GameClient {
         }
 
         if (pendingWin) {
-            // Show pending win display
             pendingWinDisplay.classList.remove('hidden');
             
             const messageElement = pendingWinDisplay.querySelector('.pending-win-message');
             const timerElement = pendingWinDisplay.querySelector('.pending-win-timer');
-            const actionsElement = pendingWinDisplay.querySelector('.pending-win-actions');
             
             if (messageElement) {
                 messageElement.textContent = `${pendingWin.playerUsername} (P${pendingWin.playerPosition + 1}) played their last card!`;
@@ -541,18 +636,10 @@ class GameClient {
                 timerElement.textContent = `${pendingWin.timeRemaining}s`;
             }
             
-            // Hide BS button for the winning player
-            if (actionsElement) {
-                const isWinningPlayer = this.gameState && pendingWin.playerPosition === this.gameState.yourPosition;
-                actionsElement.style.display = isWinningPlayer ? 'none' : 'block';
-            }
-            
-            // Clear existing timer
             if (this.pendingWinTimer) {
                 clearInterval(this.pendingWinTimer);
             }
             
-            // Start countdown timer
             let timeRemaining = pendingWin.timeRemaining;
             this.pendingWinTimer = setInterval(() => {
                 timeRemaining--;
@@ -567,10 +654,8 @@ class GameClient {
             }, 1000);
             
         } else {
-            // Hide pending win display
             pendingWinDisplay.classList.add('hidden');
             
-            // Clear timer
             if (this.pendingWinTimer) {
                 clearInterval(this.pendingWinTimer);
                 this.pendingWinTimer = null;
@@ -581,13 +666,11 @@ class GameClient {
     handlePendingWin(pendingWinData) {
         this.addGameLogEntry(pendingWinData.message);
         
-        // Create a visual alert
         const alertDiv = document.createElement('div');
         alertDiv.className = 'fixed top-4 left-1/2 transform -translate-x-1/2 bg-yellow-600 text-white px-6 py-3 rounded-lg font-bold text-lg z-50 animate-pulse';
         alertDiv.textContent = `⚠️ ${pendingWinData.playerUsername} might win! Call BS if they're bluffing!`;
         document.body.appendChild(alertDiv);
         
-        // Remove alert after 5 seconds
         setTimeout(() => {
             if (alertDiv.parentNode) {
                 alertDiv.parentNode.removeChild(alertDiv);
@@ -631,7 +714,6 @@ class GameClient {
         
         this.addGameLogEntry(resultText);
         
-        // Show revealed cards for a moment
         if (result.revealedCards && result.revealedCards.length > 0) {
             this.showRevealedCards(result.revealedCards, result.challengedUsername);
         }
@@ -678,16 +760,13 @@ class GameClient {
     handleGameOver(gameOverData) {
         this.addGameLogEntry(`🎉 GAME OVER! ${gameOverData.message}`);
         
-        // Disable game actions
         const actionsContainer = document.getElementById('game-actions-container');
         if (actionsContainer) {
             actionsContainer.style.display = 'none';
         }
         
-        // Hide pending win display
         this.updatePendingWin(null);
         
-        // Show game over modal
         const gameOverDiv = document.createElement('div');
         gameOverDiv.className = 'fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-green-600 text-white p-8 rounded-lg z-50 text-center';
         gameOverDiv.innerHTML = `

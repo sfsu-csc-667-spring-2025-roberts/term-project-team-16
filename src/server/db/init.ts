@@ -1,4 +1,4 @@
-// src/server/db/init.ts
+// src/server/db/init.ts - Simplified version (keep your original schema mostly)
 import pool from '../config/database';
 
 async function initializeDatabase() {
@@ -6,6 +6,7 @@ async function initializeDatabase() {
   try {
     await client.query('BEGIN');
 
+    // Keep your original tables exactly as they are
     // Create User table
     await client.query(`
       CREATE TABLE IF NOT EXISTS "user" (
@@ -79,7 +80,7 @@ async function initializeDatabase() {
       )
     `);
 
-    // Initialize card deck - insert all 52 cards
+    // Initialize card deck - insert all 52 cards (keep your original logic)
     await client.query(`
       INSERT INTO card (value, shape)
       SELECT v.value, s.shape
@@ -93,6 +94,40 @@ async function initializeDatabase() {
       ) s
       WHERE NOT EXISTS (SELECT 1 FROM card)
     `);
+
+    // Add just the essential performance improvements
+    console.log('Adding performance indexes...');
+    const indexes = [
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_game_players_game_user ON game_players(game_id, user_id)',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_game_players_turn ON game_players(game_id, is_turn) WHERE is_turn = TRUE',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_cards_held_player ON cards_held(game_player_id)',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_messages_game_created ON messages(game_id, created_at DESC)',
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sessions_token ON sessions(session_token)'
+    ];
+
+    for (const indexQuery of indexes) {
+      try {
+        await client.query(indexQuery);
+      } catch (error: any) {
+        if (!error.message.includes('already exists')) {
+          console.warn(`Warning creating index: ${error.message}`);
+        }
+      }
+    }
+
+    // Add basic data validation (prevent crashes)
+    console.log('Adding basic constraints...');
+    try {
+      await client.query('ALTER TABLE card ADD CONSTRAINT IF NOT EXISTS card_value_check CHECK (value >= 1 AND value <= 13)');
+      await client.query('ALTER TABLE game ADD CONSTRAINT IF NOT EXISTS game_max_players_check CHECK (max_num_players >= 2 AND max_num_players <= 8)');
+      await client.query('ALTER TABLE game ADD CONSTRAINT IF NOT EXISTS game_current_players_check CHECK (current_num_players >= 0 AND current_num_players <= max_num_players)');
+      await client.query('ALTER TABLE game_players ADD CONSTRAINT IF NOT EXISTS unique_game_user UNIQUE (game_id, user_id)');
+      await client.query('ALTER TABLE game_players ADD CONSTRAINT IF NOT EXISTS unique_game_position UNIQUE (game_id, position)');
+      await client.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_one_turn_per_game ON game_players(game_id) WHERE is_turn = TRUE');
+    } catch (error: any) {
+      // Constraints might already exist, that's fine
+      console.log('Some constraints already exist, continuing...');
+    }
 
     await client.query('COMMIT');
     console.log('Database initialized successfully');

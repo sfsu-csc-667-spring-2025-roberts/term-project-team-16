@@ -60,7 +60,7 @@ html, body {
   overflow-x: hidden;
 }
 
-/* Game Container */
+/* Game Container - Improved responsive layout */
 .game-container {
   display: grid;
   grid-template-columns: 1fr 380px;
@@ -105,7 +105,8 @@ html, body {
   display: flex;
   flex-direction: column;
   height: fit-content;
-  max-height: calc(100vh - 160px);
+  max-height: calc(100vh - 120px);
+  min-height: 500px;
 }
 
 /* Game Info Section */
@@ -291,8 +292,8 @@ html, body {
 .game-buttons {
   display: flex;
   justify-content: center;
-  gap: 9rem; /* Adds spacing between buttons */
-  margin-top: 2rem; /* Optional: adds space from above */
+  gap: 2rem;
+  margin-top: 2rem;
   flex-wrap: wrap;
 }
 
@@ -318,23 +319,65 @@ html, body {
   letter-spacing: 0.05em;
 }
 
+/* IMPROVED SELECT DROPDOWN STYLING */
 #declared-rank-select {
-  padding: var(--spacing-md) var(--spacing-lg);
+  /* Reset default appearance */
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  
+  /* Custom styling */
+  padding: var(--spacing-md) var(--spacing-xl);
+  padding-right: 3rem; /* Space for custom arrow */
   border-radius: var(--radius-lg);
-  border: 2px solid var(--game-border);
-  background: linear-gradient(135deg, var(--game-surface) 0%, var(--game-accent) 100%);
+  border: 2px solid var(--primary-color);
+  background: linear-gradient(135deg, var(--game-surface-elevated) 0%, var(--game-surface) 100%);
   color: var(--text-primary);
-  font-size: 1rem;
-  font-weight: 500;
-  transition: all 0.2s ease;
-  min-width: 200px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  font-family: inherit;
+  transition: all 0.3s ease;
+  min-width: 220px;
   text-align: center;
+  cursor: pointer;
+  outline: none;
+  box-shadow: var(--shadow-md);
+  
+  /* Custom dropdown arrow */
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f1f5f9' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 1rem center;
+  background-size: 1.2rem;
+}
+
+#declared-rank-select:hover {
+  border-color: var(--primary-light);
+  background: linear-gradient(135deg, var(--game-surface) 0%, var(--game-surface-elevated) 100%);
+  box-shadow: var(--shadow-lg), var(--shadow-glow);
+  transform: translateY(-2px);
 }
 
 #declared-rank-select:focus {
-  outline: none;
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+  border-color: var(--secondary-color);
+  box-shadow: var(--shadow-lg), 0 0 0 3px rgba(59, 130, 246, 0.3);
+  transform: translateY(-2px);
+}
+
+/* Style the dropdown options */
+#declared-rank-select option {
+  background: var(--game-surface-elevated);
+  color: var(--text-primary);
+  padding: var(--spacing-sm);
+  font-weight: 500;
+  border: none;
+}
+
+/* Firefox specific option styling */
+@-moz-document url-prefix() {
+  #declared-rank-select option {
+    background: var(--game-surface-elevated) !important;
+    color: var(--text-primary) !important;
+  }
 }
 
 /* Modern Button Styles */
@@ -479,6 +522,9 @@ html, body {
 /* Player List */
 .player-list-container {
   margin-bottom: var(--spacing-xl);
+  flex-shrink: 0;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 .player-list-container h3 {
@@ -547,7 +593,8 @@ html, body {
   overflow: hidden;
   box-shadow: var(--shadow-lg);
   border: 1px solid var(--game-border);
-  min-height: 600px;
+  min-height: 300px;
+  max-height: 100%;
 }
 
 .chat-container h3 {
@@ -617,6 +664,8 @@ html, body {
   padding: var(--spacing-md);
   background: linear-gradient(135deg, var(--game-accent) 0%, var(--game-surface-elevated) 100%);
   border-top: 1px solid var(--game-border);
+  flex-shrink: 0;
+  align-items: center;
 }
 
 .chat-form input {
@@ -628,6 +677,7 @@ html, body {
   color: var(--text-primary);
   font-size: 0.875rem;
   transition: all 0.2s ease;
+  min-width: 0;
 }
 
 .chat-form input:focus {
@@ -637,10 +687,18 @@ html, body {
 }
 
 .chat-form button {
-  padding: var(--spacing-xs) var(--spacing-sm); /* Reduced padding for better fit */
-  font-size: 0.875rem; /* Adjusted font size for consistency */
-  flex-shrink: 0; /* Prevents the button from shrinking */
-  min-width: 80px; /* Ensures a minimum width for the button */
+  padding: var(--spacing-md) var(--spacing-lg);
+  background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+  color: var(--text-inverse);
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  flex-shrink: 0; 
+  min-width: 70px;
+  font-size: 0.875rem;
 }
 
 .chat-form button:hover:not(:disabled) {
@@ -666,21 +724,66 @@ html, body {
   text-align: center;
 }
 
-/* Responsive Design */
+/* IMPROVED RESPONSIVE DESIGN */
+@media (max-width: 1400px) {
+  .game-container {
+    max-width: 1200px;
+    grid-template-columns: 1fr 320px;
+  }
+  
+  .game-sidebar {
+    padding: var(--spacing-lg);
+    max-height: calc(100vh - 100px);
+  }
+  
+  .chat-container {
+    min-height: 250px;
+  }
+}
+
+@media (max-width: 1200px) {
+  .game-container {
+    grid-template-columns: 1fr 300px;
+    gap: var(--spacing-lg);
+  }
+  
+  .game-info h2 {
+    font-size: 1.5rem;
+  }
+  
+  .hand-cards .card {
+    font-size: 1.25rem;
+    padding: var(--spacing-md) var(--spacing-sm);
+    min-width: 50px;
+  }
+}
+
 @media (max-width: 1024px) {
   .game-container {
     grid-template-columns: 1fr;
     gap: var(--spacing-lg);
     padding: var(--spacing-md);
+    max-width: 900px;
   }
   
   .game-sidebar {
     order: -1;
     max-height: none;
+    min-height: auto;
+    padding: var(--spacing-lg);
   }
   
   .chat-container {
     min-height: 300px;
+  }
+  
+  .game-buttons {
+    gap: 1.5rem;
+  }
+  
+  #declared-rank-select {
+    min-width: 180px;
+    font-size: 1rem;
   }
 }
 
@@ -698,15 +801,97 @@ html, body {
     padding: var(--spacing-md);
   }
   
-  .hand-cards .card {
+  .game-info h2 {
     font-size: 1.25rem;
-    padding: var(--spacing-md) var(--spacing-sm);
-    min-width: 50px;
+  }
+  
+  .hand-cards {
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm);
+  }
+  
+  .hand-cards .card {
+    font-size: 1rem;
+    padding: var(--spacing-sm);
+    min-width: 45px;
   }
   
   .btn {
     min-width: 120px;
     padding: var(--spacing-sm) var(--spacing-md);
+    font-size: 0.875rem;
+  }
+  
+  .game-buttons {
+    gap: 1rem;
+    flex-direction: column;
+    align-items: center;
+  }
+  
+  #declared-rank-select {
+    min-width: 160px;
+    padding: var(--spacing-sm) var(--spacing-md);
+    font-size: 0.9rem;
+  }
+  
+  .chat-container {
+    min-height: 250px;
+  }
+  
+  .chat-form {
+    padding: var(--spacing-sm);
+    gap: var(--spacing-xs);
+  }
+  
+  .chat-form button {
+    padding: var(--spacing-sm) var(--spacing-md);
+    min-width: 60px;
+    font-size: 0.8rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .game-container {
+    padding: var(--spacing-xs);
+  }
+  
+  .game-info,
+  .player-hand-section,
+  .action-section,
+  .game-log,
+  .game-sidebar {
+    padding: var(--spacing-sm);
+  }
+  
+  .hand-cards .card {
+    font-size: 0.875rem;
+    padding: var(--spacing-xs);
+    min-width: 40px;
+  }
+  
+  .btn {
+    min-width: 100px;
+    padding: var(--spacing-xs) var(--spacing-sm);
+  }
+  
+  #declared-rank-select {
+    min-width: 140px;
+    font-size: 0.875rem;
+  }
+  
+  .chat-container {
+    min-height: 200px;
+  }
+  
+  .chat-form input {
+    font-size: 0.8rem;
+    padding: var(--spacing-xs) var(--spacing-sm);
+  }
+  
+  .chat-form button {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    min-width: 50px;
+    font-size: 0.75rem;
   }
 }
 
