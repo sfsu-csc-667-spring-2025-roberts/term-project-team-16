@@ -17,8 +17,9 @@
             <li class="navbar-item"><a href="/auth/logout">Logout</a></li>
           </ul>
         </div>
-      </nav>
-      <hr class="navbar-divider"/>
+    </nav>
+    <hr class="navbar-divider"/>
+    
     <div class="game-container">
         <div class="main-game-area">
             <div class="game-info">
@@ -80,9 +81,21 @@
                 
                     <div class="game-buttons">
                         <button id="play-cards-btn" class="btn primary" type="submit">Play Selected Cards</button>
-                        <button id="call-bs-btn" class="btn bs red-alert" type="button">🚨 Call BS!</button>
                     </div>                                           
-                </form>                
+                </form>
+                
+                <div class="bs-button-container" style="text-align: center; margin-top: 1rem;">
+                    <div class="bs-tooltip">
+                        <button id="call-bs-btn" class="btn bs red-alert" type="button">🚨 Call BS!</button>
+                        <span class="tooltiptext">
+                            Call BS if you think the last player is lying about their cards. 
+                            Cannot call BS on your own play.
+                        </span>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-1 text-center">
+                        Click to challenge the last play
+                    </p>
+                </div>
             </div>
 
             <div id="game-log" class="game-log mt-4 p-3 bg-gray-800 rounded-lg shadow-md h-40 overflow-y-auto text-sm">

@@ -1,4 +1,3 @@
-// src/server/socket-handlers/game.ts - Complete final version
 import { Server as IOServer } from "socket.io";
 import pool from "../config/database";
 import { AugmentedSocket } from "../config/socket";
@@ -182,7 +181,7 @@ async function getPlayerHand(gamePlayerId: number): Promise<Card[]> {
 }
 
 // I tried to have an LLM guide me through condensing this and reducing SQL queries and claude spat out 2000 lines of sql optimization...
-// and a bunch of corpo-speak and emojis...
+// and a bunch of corpo-speak and emojis... but I think I extracted some good sql queries from it
 async function fetchFullGameStateForClient(gameId: string, targetUserId?: number): Promise<GameStateForClient | null> {
     const gameIdInt = parseInt(gameId, 10);
     if (isNaN(gameIdInt)) {
@@ -256,7 +255,7 @@ async function fetchFullGameStateForClient(gameId: string, targetUserId?: number
         }
     }
 
-    // Add player-specific data if targetUserId provided
+    // r
     if (targetUserId) {
         const playerInfo = players.find(p => p.userId === targetUserId);
         if (playerInfo) {
@@ -687,7 +686,7 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
         }
     });
 
-    // BS call handler with CORRECT turn logic - pile receiver gets turn, dropdown appears
+    // IMPROVED BS CALL HANDLER WITH BETTER ERROR MESSAGES
     socket.on('game:callBS', async ({ gameId }, callback) => {
         if (!socket.userId || !socket.username) return callback?.({ error: 'Not authenticated.' });
         
@@ -704,17 +703,24 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
                 [gameIdInt, socket.userId]
             );
             
-            if (!playerInfoRes.rows.length) throw new Error('Caller not found in this game.');
+            if (!playerInfoRes.rows.length) {
+                throw new Error('You are not a player in this game.');
+            }
             
             const { game_player_id: callerGamePlayerId, position: callerPosition, game_state: gameState } = playerInfoRes.rows[0];
             
             if (gameState !== 'playing' && gameState !== 'pending_win') {
-                throw new Error('Game is not in a state where BS can be called.');
+                throw new Error('You can only call BS during an active game.');
             }
 
             const lastPlay = GameStateManager.getLastPlay(gameId);
-            if (!lastPlay) throw new Error('No play to call BS on.');
-            if (lastPlay.gamePlayerId === callerGamePlayerId) throw new Error("Cannot call BS on your own play.");
+            if (!lastPlay) {
+                throw new Error('No play to call BS on. Wait for someone to play cards first.');
+            }
+            
+            if (lastPlay.gamePlayerId === callerGamePlayerId) {
+                throw new Error("You cannot call BS on your own play!");
+            }
 
             if (gameState === 'pending_win') {
                 GameStateManager.clearWinTimer(gameId);
