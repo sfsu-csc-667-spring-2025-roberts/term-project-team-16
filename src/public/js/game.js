@@ -1,5 +1,3 @@
-// Updated game.js client with simplified card play (no declaration dropdown)
-
 class GameClient {
     constructor() {
         this.socket = null;
@@ -15,7 +13,11 @@ class GameClient {
         
         this.init();
     }
-
+    //in retrospect I probably could have just made all of this in half as many functions, but I was really clueless
+    //I was constantly running to google and LLMs and github and lecture recordings for help, I was constantly breaking types
+    //but it's ok cause its like client-side
+    //also if you want the game and site to run a lot faster remove the .io in index.js, I just thought it looked good for testing but it will not scale well for sure
+    //it basically means emits for every game are going everywhere right now, but I liked the live game list.
     init() {
         this.gameId = this.extractGameIdFromUrl();
         this.initializeSocket();
@@ -213,7 +215,7 @@ class GameClient {
     }
 
     createRequiredRankDisplay() {
-        // Create display for what rank is required
+        // this came in surprisingly late... I might have forgotten how to play BS
         if (!document.getElementById('required-rank-display')) {
             const requiredRankDiv = document.createElement('div');
             requiredRankDiv.id = 'required-rank-display';
@@ -249,7 +251,7 @@ class GameClient {
         }
     }
 
-    // Game actions
+    // check connection before starting actions
     startGame() {
         if (!this.isConnected) {
             this.updateConnectionStatus('Not connected to server', 'error');
@@ -324,30 +326,50 @@ class GameClient {
         });
     }
 
-    callBS() {
-        if (!this.isConnected) {
-            this.updateConnectionStatus('Not connected to server', 'error');
-            return;
-        }
+    // In game.js, update the callBS function for better user feedback
 
-        const callBSBtn = document.getElementById('call-bs-btn');
-        if (callBSBtn) {
-            callBSBtn.disabled = true;
-            callBSBtn.textContent = 'Calling BS...';
-        }
+callBS() {
+    if (!this.isConnected) {
+        this.updateConnectionStatus('Not connected to server', 'error');
+        return;
+    }
 
-        this.socket.emit('game:callBS', { gameId: this.gameId }, (response) => {
+    const callBSBtn = document.getElementById('call-bs-btn');
+    
+    if (callBSBtn && callBSBtn.disabled) {
+        return;
+    }
+
+    if (this.gameState?.lastPlay && this.gameState.yourPosition === this.gameState.lastPlay.playerPosition) {
+        alert("You cannot call BS on your own play!");
+        return;
+    }
+
+    if (!this.gameState?.lastPlay) {
+        alert("No play to call BS on!");
+        return;
+    }
+
+    if (callBSBtn) {
+        callBSBtn.disabled = true;
+        callBSBtn.textContent = 'Calling BS...';
+        callBSBtn.className = 'bg-gray-500 text-gray-300 px-4 py-2 rounded cursor-not-allowed';
+    }
+
+    this.socket.emit('game:callBS', { gameId: this.gameId }, (response) => {
+        
+        if (response?.error) {
+            console.error('[GameClient] Error calling BS:', response.error);
+            alert(`Error calling BS: ${response.error}`);
+            
             if (callBSBtn) {
                 callBSBtn.disabled = false;
                 callBSBtn.textContent = '🚨 Call BS!';
+                callBSBtn.className = 'bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded font-bold';
             }
-
-            if (response?.error) {
-                console.error('[GameClient] Error calling BS:', response.error);
-                alert(`Error calling BS: ${response.error}`);
-            }
-        });
-    }
+        }
+    });
+}
 
     sendMessage() {
         if (!this.isConnected) {
@@ -538,63 +560,59 @@ class GameClient {
         });
     }
 
-    updateGameActions(gameState) {
-        const actionsContainer = document.getElementById('game-actions-container');
-        const playForm = document.getElementById('play-form');
-        const callBSBtn = document.getElementById('call-bs-btn');
-        const startBtn = document.getElementById('start-game-btn');
+    // In game.js, replace the updateGameActions function's BS button logic
 
-        if (!actionsContainer) return;
+updateGameActions(gameState) {
+    const actionsContainer = document.getElementById('game-actions-container');
+    const playForm = document.getElementById('play-form');
+    const callBSBtn = document.getElementById('call-bs-btn');
+    const startBtn = document.getElementById('start-game-btn');
 
-        const isPlaying = gameState.gameState.state === 'playing';
-        const isPendingWin = gameState.gameState.state === 'pending_win';
-        const isMyTurn = gameState.isMyTurn;
-        const hasLastPlay = gameState.lastPlay !== null;
-        const pileIsEmpty = gameState.pileCardCount === 0;
+    if (!actionsContainer) return;
 
-        // Show/hide start button
-        if (startBtn) {
-            startBtn.style.display = (isPlaying || isPendingWin) ? 'none' : 'block';
-        }
+    const isPlaying = gameState.gameState.state === 'playing';
+    const isPendingWin = gameState.gameState.state === 'pending_win';
+    const isMyTurn = gameState.isMyTurn;
+    const pileIsEmpty = gameState.pileCardCount === 0;
 
-        // Show/hide actions container
-        actionsContainer.style.display = (isPlaying || isPendingWin) ? 'block' : 'none';
+    // Show/hide start button
+    if (startBtn) {
+        startBtn.style.display = (isPlaying || isPendingWin) ? 'none' : 'block';
+    }
 
-        // Control declaration dropdown based on pile state
-        const declaredRankSelect = document.getElementById('declared-rank-select');
-        const declaredRankLabel = document.querySelector('label[for="declared-rank-select"]');
-        
-        if (declaredRankSelect && declaredRankLabel) {
-            // Show dropdown only when pile is empty AND it's my turn
-            if (pileIsEmpty && isMyTurn && isPlaying && !isPendingWin) {
-                declaredRankSelect.style.display = 'block';
-                declaredRankLabel.style.display = 'block';
-                declaredRankLabel.textContent = 'Choose starting rank:';
-            } else {
-                declaredRankSelect.style.display = 'none';
-                declaredRankLabel.style.display = 'none';
-            }
-        }
+    // Show/hide actions container
+    actionsContainer.style.display = (isPlaying || isPendingWin) ? 'block' : 'none';
 
-        // Show/hide play form and BS button
-        if (playForm && callBSBtn) {
-            if (isPendingWin) {
-                playForm.style.display = 'none';
-                const pendingWin = gameState.pendingWin;
-                const isWinningPlayer = pendingWin && pendingWin.playerPosition === gameState.yourPosition;
-                callBSBtn.style.display = (!isWinningPlayer && hasLastPlay) ? 'block' : 'none';
-            } else if (isMyTurn && isPlaying) {
-                playForm.style.display = 'block';
-                callBSBtn.style.display = hasLastPlay ? 'block' : 'none';
-            } else if (isPlaying && hasLastPlay) {
-                playForm.style.display = 'none';
-                callBSBtn.style.display = 'block';
-            } else {
-                playForm.style.display = 'none';
-                callBSBtn.style.display = 'none';
-            }
+    // Control declaration dropdown based on pile state
+    const declaredRankSelect = document.getElementById('declared-rank-select');
+    const declaredRankLabel = document.querySelector('label[for="declared-rank-select"]');
+    
+    if (declaredRankSelect && declaredRankLabel) {
+        // Show dropdown only when pile is empty AND it's my turn
+        if (pileIsEmpty && isMyTurn && isPlaying && !isPendingWin) {
+            declaredRankSelect.style.display = 'block';
+            declaredRankLabel.style.display = 'block';
+            declaredRankLabel.textContent = 'Choose starting rank:';
+        } else {
+            declaredRankSelect.style.display = 'none';
+            declaredRankLabel.style.display = 'none';
         }
     }
+
+    if (callBSBtn) {
+        callBSBtn.style.display = (isPlaying || isPendingWin) ? 'block' : 'none';
+    }
+
+    if (playForm) {
+        if (isPendingWin) {
+            playForm.style.display = 'none';
+        } else if (isMyTurn && isPlaying) {
+            playForm.style.display = 'block';
+        } else {
+            playForm.style.display = 'none';
+        }
+    }
+}
 
     updatePileInfo(gameState) {
         const pileInfoElement = document.getElementById('pile-info');

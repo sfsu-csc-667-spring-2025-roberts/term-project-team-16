@@ -3,7 +3,7 @@ import { Server as IOServer } from "socket.io";
 import pool from "../config/database";
 import { AugmentedSocket } from "../config/socket";
 
-// Interfaces
+// type interfaces
 interface ChatMessage {
     content: string;
     username: string;
@@ -53,10 +53,10 @@ interface GameStateForClient {
         timeRemaining: number;
     };
     isMyTurn?: boolean;
-    requiredRank?: string | null; // null when pile is empty (player chooses)
+    requiredRank?: string | null; // null when pile is empty
 }
 
-// Game state management with better structure
+// game states
 class GameStateManager {
     private static gameWinTimers = new Map<string, NodeJS.Timeout>();
     private static gamePendingWins = new Map<string, { playerPosition: number; playerUsername: string; startTime: number }>();
@@ -116,25 +116,24 @@ class GameStateManager {
     }
 }
 
-// Helper functions for rank management
+// helper functions called for functions for rank management
 function getNextRequiredRank(gameId: string): string | null {
     const pile = GameStateManager.getGamePile(gameId);
     
-    // If no cards in pile, player can choose any rank (return null to show dropdown)
     if (pile.length === 0) {
         return null; // This will show the declaration dropdown
     }
     
-    // If there are cards in pile, get the next rank in sequence
     const lastPlay = GameStateManager.getLastPlay(gameId);
     if (lastPlay) {
         return getNextRankInSequence(lastPlay.declaredRank);
     }
     
-    // Fallback (shouldn't happen if pile has cards)
+    // set to aces if something isnt working right
     return 'A';
 }
 
+//maps for numbers to card faces
 function getNextRankInSequence(currentRank: string): string {
     const rankSequence = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
     const currentIndex = rankSequence.indexOf(currentRank);
@@ -147,7 +146,7 @@ function getNextRankInSequence(currentRank: string): string {
     const nextIndex = (currentIndex + 1) % rankSequence.length;
     return rankSequence[nextIndex];
 }
-
+//I will keep these here just in case....
 function rankToValue(rank: string): number {
     const rankMap: { [key: string]: number } = {
         'A': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6,
@@ -169,7 +168,7 @@ async function getPlayerGamePlayerId(gameId: string, userId: number): Promise<nu
     );
     return res.rows.length > 0 ? res.rows[0].game_player_id : null;
 }
-
+//check your hand, not draw
 async function getPlayerHand(gamePlayerId: number): Promise<Card[]> {
     const handRes = await pool.query(
         `SELECT c.card_id, c.value, c.shape 
@@ -182,7 +181,8 @@ async function getPlayerHand(gamePlayerId: number): Promise<Card[]> {
     return handRes.rows;
 }
 
-// Optimized game state fetching with fewer queries
+// I tried to have an LLM guide me through condensing this and reducing SQL queries and claude spat out 2000 lines of sql optimization...
+// and a bunch of corpo-speak and emojis...
 async function fetchFullGameStateForClient(gameId: string, targetUserId?: number): Promise<GameStateForClient | null> {
     const gameIdInt = parseInt(gameId, 10);
     if (isNaN(gameIdInt)) {
@@ -190,7 +190,7 @@ async function fetchFullGameStateForClient(gameId: string, targetUserId?: number
         return null;
     }
 
-    // Single query to get game info and all players
+    // Single query to get all game info
     const gameAndPlayersResult = await pool.query(
         `SELECT 
             g.state, g.current_num_players,
@@ -242,7 +242,7 @@ async function fetchFullGameStateForClient(gameId: string, targetUserId?: number
         requiredRank
     };
 
-    // Add pending win info if game is in pending_win state
+    // maybe we should know who is pending a win I guess? neat idea copilot
     if (gameDbState.state === 'pending_win') {
         const pendingWin = GameStateManager.getPendingWin(gameId);
         if (pendingWin) {
@@ -716,7 +716,6 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
             if (!lastPlay) throw new Error('No play to call BS on.');
             if (lastPlay.gamePlayerId === callerGamePlayerId) throw new Error("Cannot call BS on your own play.");
 
-            // Clear timers if in pending win
             if (gameState === 'pending_win') {
                 GameStateManager.clearWinTimer(gameId);
                 GameStateManager.clearPendingWin(gameId);
@@ -776,7 +775,6 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
                 }
             }
             
-            // Give pile to appropriate player
             if (pile.length > 0) {
                 const insertPromises = pile.map(card => 
                     client.query(
@@ -786,21 +784,16 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
                 );
                 await Promise.all(insertPromises);
             }
-            
-            // CRITICAL: Reset pile to 0 cards so dropdown appears for pile receiver
+
             GameStateManager.setGamePile(gameId, []);
             GameStateManager.clearLastPlay(gameId);
-            
-            // Set game to playing and give turn to pile receiver 
-            // This is CORRECT - BS call gives turn to pile receiver, NOT continuing normal turn order
+
             await client.query(`UPDATE game SET state = 'playing' WHERE game_id = $1`, [gameIdInt]);
-            await client.query(`UPDATE game_players SET is_turn = FALSE WHERE game_id = $1`, [gameIdInt]);
-            await client.query(`UPDATE game_players SET is_turn = TRUE WHERE game_player_id = $1`, [pileReceiverGamePlayerId]);
-            
+
             await client.query('COMMIT');
-            
-            console.log(`[GameTS:callBS] BS resolved: pile receiver ${pileReceiverPosition} gets turn, pile cleared (dropdown will appear)`);
-            
+
+            console.log(`[GameTS:callBS] BS resolved: pile given to position ${pileReceiverPosition}, turn stays with current player`);
+
             io.to(`game:${gameId}`).emit('game:bsResult', {
                 callerPosition,
                 callerUsername,
@@ -811,7 +804,7 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
                 pileReceiverPosition,
                 message: eventMessage
             });
-            
+
             await broadcastGameState(io, gameId);
             callback?.({ success: true });
             
