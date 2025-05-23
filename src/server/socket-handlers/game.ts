@@ -468,7 +468,7 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
             
             const remainingCardsRes = await clientDb.query(`SELECT COUNT(*) as count FROM cards_held WHERE game_player_id = $1`, [gamePlayerId]);
             const remainingCardsCount = parseInt(remainingCardsRes.rows[0].count, 10);
-
+            // game end checks
             if (remainingCardsCount === 0) {
                 // Player played their last card - enter pending win state
                 await clientDb.query(`UPDATE game SET state = 'pending_win' WHERE game_id = $1`, [gameIdInt]);
@@ -534,7 +534,7 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
             clientDb.release();
         }
     });
-
+    // call bs
     socket.on('game:callBS', async ({ gameId }, callback) => {
         if (!socket.userId || !socket.username) return callback?.({ error: 'Not authenticated.' });
         const gameIdInt = parseInt(gameId, 10);

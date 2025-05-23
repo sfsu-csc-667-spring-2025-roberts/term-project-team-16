@@ -561,5 +561,3 @@ socket.on('game:ended', (data) => {
     fetchGames(gameState.currentPage);
 });
 
-// Initial fetch of games will happen after auth:status is received
-// This prevents the race condition where games are rendered before we know the user's auth status

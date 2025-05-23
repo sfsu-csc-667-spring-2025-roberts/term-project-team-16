@@ -31,14 +31,14 @@
                 <form id="play-form" autocomplete="off" class="flex flex-col items-center gap-3" style="display: none;">
                     <div>
                         <label for="declared-rank-select" class="block mb-1 text-sm font-medium text-gray-300">Declare selected cards as:</label>
-                        <select id="declared-rank-select" required class="bg-gray-700 border border-gray-600 text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5">
+                        <select id="declared-rank-select">
                             <!-- Options will be populated by JavaScript -->
                         </select>
                     </div>
                     <button id="play-cards-btn" class="btn primary w-full" type="submit">Play Selected Cards</button>
                 </form>
 
-                <button id="call-bs-btn" class="btn bs w-full mt-2" style="display: none;">Call BS!</button>
+                <button id="call-bs-btn" class="btn bs w-full mt-2">Call BS!</button>
             </div>
 
             <div id="game-log" class="game-log mt-4 p-3 bg-gray-800 rounded-lg shadow-md h-40 overflow-y-auto text-sm">
