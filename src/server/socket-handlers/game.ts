@@ -215,6 +215,9 @@ async function finalizePlayerWin(io: IOServer, gameId: string, winnerGamePlayerI
             message: `Player ${winnerUsername} (P${winnerPosition + 1}) has won the game!` 
         });
         
+        // emit game over to the lobby
+        io.emit('game:ended', { gameId });
+        
         console.log(`[GameTS:finalizePlayerWin] Game ${gameId} ended with winner: ${winnerUsername} (P${winnerPosition + 1})`);
         
     } catch (error) {

@@ -19,7 +19,7 @@ interface GameState {
 
 // Track active users and games
 const activeUsers = new Map<string, string>(); // socketId -> username
-const activeGames = new Map<string, GameState>(); // gameId -> GameState
+// Note: keeping games tracking in database for consistency with HTTP endpoints
 
 // Added io parameter with IOServer type
 export default function handleLobbyConnection(io: IOServer, socket: AugmentedSocket): void {
@@ -65,23 +65,27 @@ export default function handleLobbyConnection(io: IOServer, socket: AugmentedSoc
         try {
             const result = await pool.query(
                 `SELECT g.game_id, g.state, g.current_num_players,
-                        array_agg(u.username) as players
+                        COALESCE(json_agg(
+                            CASE WHEN u.username IS NOT NULL
+                            THEN u.username
+                            END
+                        ) FILTER (WHERE u.username IS NOT NULL), '[]') as players
                  FROM game g
                  LEFT JOIN game_players gp ON g.game_id = gp.game_id
                  LEFT JOIN "user" u ON gp.user_id = u.user_id
                  WHERE g.state IN ('waiting', 'playing')
-                 GROUP BY g.game_id, g.state, g.current_num_players`
+                 GROUP BY g.game_id, g.state, g.current_num_players
+                 ORDER BY g.game_id DESC`
             );
 
-            result.rows.forEach(game => {
-                activeGames.set(game.game_id.toString(), {
-                    id: game.game_id,
-                    players: game.players.filter(Boolean),
-                    state: game.state,
-                    createdAt: new Date() // Consider fetching actual creation date if important
-                });
-            });
-            socket.emit('games:list', Array.from(activeGames.values()));
+            const games = result.rows.map(game => ({
+                id: game.game_id.toString(),
+                players: game.players || [],
+                state: game.state,
+                createdAt: new Date()
+            }));
+
+            socket.emit('games:list', games);
         } catch (error) {
             console.error('Error loading active games:', error);
         }
@@ -123,98 +127,109 @@ export default function handleLobbyConnection(io: IOServer, socket: AugmentedSoc
         }
     });
 
-    // Game management
+    // Game management - simplified to avoid conflicts with HTTP endpoints
     socket.on('game:create', async (data, callback) => {
         try {
             //login check
             if (!userId || !username) {
                 return callback?.({ error: 'Not authenticated' });
             }
-            //associate player to game
-            const result = await pool.query(
-                `INSERT INTO game (max_num_players, current_num_players, state)
-                 VALUES ($1, $2, $3)
-                 RETURNING game_id`,
-                [4, 1, 'waiting']
-            );
-            const gameId = result.rows[0].game_id.toString(); // Ensure gameId is string for Map key
-            //get player spot within the game, this probably could hard lock the lobby owner or something if we wanted them to...
-            await pool.query(
-                `INSERT INTO game_players (game_id, user_id, position)
-                 VALUES ($1, $2, $3)`,
-                [gameId, userId, 0]
-            );
-            //actual game start code
-            const newGame: GameState = {
-                id: gameId,
-                players: [username],
-                state: 'waiting',
-                createdAt: new Date()
-            };
-            activeGames.set(gameId, newGame);
-            io.emit('game:created', newGame);
-            return callback?.({ gameId });
+
+            // Suggest using HTTP endpoint instead for consistency
+            return callback?.({ 
+                error: 'Please use the Create Game button to create a new game',
+                redirect: true 
+            });
         } catch (error) {
-            console.error('Error creating game:', error);
+            console.error('Error in game:create handler:', error);
             return callback?.({ error: 'Failed to create game' });
         }
     });
-    // join game
+    
+    // join game - simplified to avoid conflicts with HTTP endpoints
     socket.on('game:join', async ({ gameId }, callback) => {
         try {
             if (!userId || !username) {
                 return callback?.({ error: 'Not authenticated' });
             }
 
-            const game = activeGames.get(gameId);
-            if (!game) {
-                return callback?.({ error: 'Game not found' });
-            }
-            if (game.players.length >= 4 || game.state !== 'waiting') {
-                return callback?.({ error: 'Game is full or not in waiting state' });
-            }
-
-            await pool.query(
-                `INSERT INTO game_players (game_id, user_id, "position")
-                 VALUES ($1, $2, $3)`, // Ensure "position" is quoted if it's a reserved keyword or causing issues
-                [gameId, userId, game.players.length]
-            );
-            await pool.query(
-                `UPDATE game SET current_num_players = current_num_players + 1 WHERE game_id = $1`,
-                [gameId]
-            );
-
-            game.players.push(username);
-            activeGames.set(gameId, game);
-
-            const gameData = { gameId, players: game.players, state: game.state };
-            io.emit('game:joined', gameData);
-            return callback?.({ success: true });
+            // Suggest using HTTP endpoint instead for consistency
+            return callback?.({ 
+                error: 'Please use the Join Game button to join a game',
+                redirect: true 
+            });
         } catch (error) {
-            console.error('Error joining game:', error);
+            console.error('Error in game:join handler:', error);
             return callback?.({ error: 'Failed to join game' });
         }
     });
+
     // remove game from lobby when finished
     socket.on('game:end', async ({ gameId }, callback) => { // this game id is a string
         try {
             if (!userId) {
                 return callback?.({ error: 'Not authenticated' });
             }
+
+            // Check if user is in the game
+            const playerCheck = await pool.query(
+                "SELECT * FROM game_players WHERE game_id = $1 AND user_id = $2",
+                [parseInt(gameId), userId] // this game id is a number....
+            );
+
+            if (playerCheck.rows.length === 0) {
+                return callback?.({ error: 'Not a player in this game' });
+            }
+
             await pool.query(
                 `UPDATE game SET state = 'ended' WHERE game_id = $1`,
                 [parseInt(gameId)] // this game id is a number....
             );
-            const game = activeGames.get(gameId);
-            if (game) {
-                game.state = 'ended';
-                activeGames.delete(gameId);
-                io.emit('game:ended', { gameId });
-            }
+            
+            // Emit to all clients
+            io.emit('game:ended', { gameId });
+            
             return callback?.({ success: true });
         } catch (error) {
             console.error('Error ending game:', error);
             return callback?.({ error: 'Failed to end game' });
+        }
+    });
+
+    // Handle real-time game updates (for when games are updated via HTTP endpoints)
+    socket.on('game:requestUpdate', async ({ gameId }, callback) => {
+        try {
+            const result = await pool.query(
+                `SELECT g.game_id, g.state, g.current_num_players,
+                        COALESCE(json_agg(
+                            CASE WHEN u.username IS NOT NULL
+                            THEN u.username
+                            END
+                        ) FILTER (WHERE u.username IS NOT NULL), '[]') as players
+                 FROM game g
+                 LEFT JOIN game_players gp ON g.game_id = gp.game_id
+                 LEFT JOIN "user" u ON gp.user_id = u.user_id
+                 WHERE g.game_id = $1
+                 GROUP BY g.game_id, g.state, g.current_num_players`,
+                [gameId]
+            );
+
+            if (result.rows.length > 0) {
+                const game = result.rows[0];
+                const gameData = {
+                    id: game.game_id.toString(),
+                    players: game.players || [],
+                    state: game.state,
+                    createdAt: new Date()
+                };
+                
+                return callback?.({ success: true, game: gameData });
+            } else {
+                return callback?.({ error: 'Game not found' });
+            }
+        } catch (error) {
+            console.error('Error fetching game update:', error);
+            return callback?.({ error: 'Failed to get game update' });
         }
     });
 

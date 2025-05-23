@@ -348,7 +348,12 @@ function createGameElement(game) {
     // Check if current user is in the game
     // Add defensive programming for auth not being available yet
     const userId = socket.auth?.userId || null;
-    const isPlayerInGame = userId && game.players.some(p => p.user_id === userId);
+    const isPlayerInGame = userId && game.players && (
+        Array.isArray(game.players) ? 
+        game.players.some(p => 
+            typeof p === 'string' ? p === socket.auth?.username : p.user_id === userId
+        ) : false
+    );
     
     // Add debug logging to help track auth issues
     if (!userId && socket.connected) {
@@ -358,50 +363,66 @@ function createGameElement(game) {
     div.setAttribute('data-user-in-game', isPlayerInGame ? 'true' : 'false');
     div.setAttribute('data-game-id', game.game_id || game.id); // Add for easier debugging
     
+    // Calculate player count more safely
+    const playerCount = game.players ? 
+        (Array.isArray(game.players) ? game.players.length : 0) : 0;
+    
     div.innerHTML = `
         <div class="game-info">
             <span class="game-id">Game #${game.game_id || game.id}</span>
-            <span class="player-count">${game.players.length} players</span>
+            <span class="player-count">${playerCount}/4 players</span>
             <span class="game-status ${game.state}">${game.state === 'waiting' ? 'Waiting' : 'In Progress'}</span>
         </div>
         <div class="game-actions">
             ${isPlayerInGame ? 
-                `<button class="btn ${game.state === 'playing' ? 'rejoin-game' : 'join-game'}" data-game-id="${game.game_id || game.id}">
-                    ${game.state === 'playing' ? 'Rejoin Game' : 'Return to Game'}
+                `<button class="btn ${game.state === 'playing' ? 'rejoin-game' : 'waiting-game'}" data-game-id="${game.game_id || game.id}">
+                    ${game.state === 'playing' ? 'Rejoin Game' : 'Enter Game'}
                 </button>` :
-                (game.state === 'waiting' && userId ? 
+                (game.state === 'waiting' && userId && playerCount < 4 ? 
                     `<button class="btn join-game" data-game-id="${game.game_id || game.id}">Join Game</button>` :
-                    '<span class="game-status">In Progress</span>'
+                    `<span class="game-status">${game.state === 'waiting' ? 'Game Full' : 'In Progress'}</span>`
                 )
             }
         </div>
     `;
 
     // Add join/rejoin game handler
-    const actionButton = div.querySelector('.join-game, .rejoin-game');
+    const actionButton = div.querySelector('.join-game, .rejoin-game, .waiting-game');
     if (actionButton) {
         actionButton.addEventListener('click', async () => {
             const gameId = actionButton.getAttribute('data-game-id');
-            if (isPlayerInGame) {
-                // If player is already in the game, just navigate to it
-                window.location.href = `/games/${gameId}`;
-            } else {
-                try {
+            const isJoinAction = actionButton.classList.contains('join-game');
+            
+            try {
+                actionButton.disabled = true;
+                
+                if (isJoinAction) {
+                    // Joining a new game
                     const response = await fetch(`/games/${gameId}/join`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' }
                     });
                     
                     if (response.ok) {
-                        window.location.href = `/games/${gameId}`;
+                        // The socket event will update the UI
+                        showNotification('Joined game successfully!', 'success');
+                        // Small delay to let the socket update, then navigate
+                        setTimeout(() => {
+                            window.location.href = `/games/${gameId}`;
+                        }, 500);
                     } else {
                         const error = await response.json();
-                        alert(error.error || 'Failed to join game');
+                        showNotification(error.error || 'Failed to join game', 'warning');
                     }
-                } catch (error) {
-                    console.error('Error joining game:', error);
-                    alert('Failed to join game');
+                } else {
+                    // If player is already in the game, just navigate to it
+                    window.location.href = `/games/${gameId}`;
                 }
+            } catch (error) {
+                console.error('Error with game action:', error);
+                showNotification('Failed to perform action', 'warning');
+            } finally {
+                actionButton.disabled = false;
             }
         });
     }
@@ -425,6 +446,9 @@ document.getElementById('next-page')?.addEventListener('click', () => {
 // Create game button handler
 document.getElementById('create-game')?.addEventListener('click', async () => {
     try {
+        const button = document.getElementById('create-game');
+        if (button) button.disabled = true;
+        
         const response = await fetch('/games', {
             method: 'POST',
             headers: {
@@ -434,12 +458,19 @@ document.getElementById('create-game')?.addEventListener('click', async () => {
         
         if (response.ok) {
             const game = await response.json();
+            // The socket event will handle updating the UI
             window.location.href = `/games/${game.id}`;
         } else {
-            console.error('Failed to create game');
+            const error = await response.json();
+            console.error('Failed to create game:', error);
+            showNotification(error.error || 'Failed to create game', 'warning');
         }
     } catch (error) {
         console.error('Error creating game:', error);
+        showNotification('Failed to create game', 'warning');
+    } finally {
+        const button = document.getElementById('create-game');
+        if (button) button.disabled = false;
     }
 });
 
@@ -463,20 +494,31 @@ function showNotification(message, type = 'info') {
     const notification = document.createElement('div');
     notification.className = `lobby-notification ${type}`;
     notification.textContent = message;
+    
+    // Better styling
+    const bgColors = {
+        'info': '#2196F3',
+        'success': '#4CAF50', 
+        'warning': '#FF9800',
+        'error': '#f44336'
+    };
+    
     notification.style.cssText = `
         position: fixed;
-        top: 20px;
+        top: 80px;
         right: 20px;
         padding: 12px 20px;
-        border-radius: 6px;
+        border-radius: 8px;
         color: white;
         font-size: 14px;
-        z-index: 1000;
+        font-weight: 500;
+        z-index: 10000;
         cursor: pointer;
         animation: slideInFromRight 0.3s ease-out;
-        ${type === 'info' ? 'background: #2196F3;' : ''}
-        ${type === 'success' ? 'background: #4CAF50;' : ''}
-        ${type === 'warning' ? 'background: #FF9800;' : ''}
+        background: ${bgColors[type] || bgColors.info};
+        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        max-width: 300px;
+        word-wrap: break-word;
     `;
     
     // Add CSS animation if not already present
@@ -499,7 +541,11 @@ function showNotification(message, type = 'info') {
     // Click to dismiss
     notification.addEventListener('click', () => {
         notification.style.animation = 'slideOutToRight 0.3s ease-in';
-        setTimeout(() => notification.remove(), 300);
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.remove();
+            }
+        }, 300);
     });
     
     document.body.appendChild(notification);
@@ -508,7 +554,11 @@ function showNotification(message, type = 'info') {
     setTimeout(() => {
         if (notification.parentNode) {
             notification.style.animation = 'slideOutToRight 0.3s ease-in';
-            setTimeout(() => notification.remove(), 300);
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.remove();
+                }
+            }, 300);
         }
     }, 5000);
 }
@@ -537,6 +587,22 @@ function addRefreshButton() {
 document.addEventListener('DOMContentLoaded', () => {
     addRefreshButton();
 });
+
+// Add a helper function to refresh a specific game's data
+async function refreshGameData(gameId) {
+    return new Promise((resolve) => {
+        socket.emit('game:requestUpdate', { gameId }, (response) => {
+            if (response?.success && response.game) {
+                updateSingleGameElement(gameId, response.game);
+                updateLocalGameData(gameId, response.game);
+                resolve(true);
+            } else {
+                console.error('Failed to refresh game data:', response?.error);
+                resolve(false);
+            }
+        });
+    });
+}
 
 // ===== OPTIMIZED SOCKET EVENT HANDLERS =====
 
@@ -587,9 +653,18 @@ socket.on('auth:status', (data) => {
 socket.on('game:created', (data) => {
     console.log('New game created:', data);
     
+    // Convert socket data to the format expected by createGameElement
+    const gameData = {
+        game_id: data.id || data.game_id,
+        id: data.id || data.game_id,
+        players: data.players || [],
+        state: data.state || 'waiting',
+        current_num_players: data.players ? data.players.length : 0
+    };
+    
     // If we're on page 1, add the new game to the top
-    if (addNewGameToTop(data)) {
-        showNotification(`New game #${data.id || data.game_id} created!`, 'success');
+    if (addNewGameToTop(gameData)) {
+        showNotification(`New game #${gameData.game_id} created!`, 'success');
     } else {
         // If not on page 1, just show notification
         showNewGameNotification();
@@ -601,10 +676,12 @@ socket.on('game:joined', (data) => {
     console.log('Game joined:', data);
     
     // Try to update the specific game if it's visible
+    // Convert socket data format
     const gameData = {
         game_id: data.gameId,
-        players: data.players.map ? data.players.map(username => ({ user_id: null, username })) : data.players, // Handle both formats
-        state: data.state
+        players: data.players || [], // Handle both formats
+        state: data.state,
+        current_num_players: data.players ? data.players.length : 0
     };
     
     if (updateSingleGameElement(data.gameId, gameData)) {
@@ -644,7 +721,8 @@ socket.on('game:stateChanged', (data) => {
     const gameData = {
         game_id: data.gameId,
         state: data.state,
-        players: data.players
+        players: data.players || [],
+        current_num_players: data.players ? data.players.length : 0
     };
     
     if (updateSingleGameElement(data.gameId, gameData)) {
@@ -654,4 +732,10 @@ socket.on('game:stateChanged', (data) => {
         // Only refresh if we're on page 1 and the game should be visible
         fetchLatestGames();
     }
+});
+
+// Enhanced error handling for socket events
+socket.on('lobby:messageError', (data) => {
+    console.error('Message error:', data);
+    showNotification(data.error || 'Message failed to send', 'warning');
 });

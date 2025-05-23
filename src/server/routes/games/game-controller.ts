@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from "express";
 import { Session } from "express-session";
 import { RequestHandler } from "express-serve-static-core";
 import { QueryResult } from "pg";
+import { Server as IOServer } from "socket.io";
 import pool from "../../config/database";
 //yes our whole API is in websockets, I basically followed along lectures with AI for the lobby chat sockets and then made something similar for the game logic
 //and yes this would be a nightmare to convert to other cardgames or besides the turn structure, maintain, or secure, but I learned stuff
@@ -32,7 +33,52 @@ interface Player {
     username: string;
 }
 
+interface GameState {
+    id: string;
+    players: string[];
+    state: 'waiting' | 'playing' | 'ended';
+    createdAt: Date;
+}
+
 const router = express.Router();
+
+// Helper function to get IO instance from app
+function getIOInstance(req: Request): IOServer | null {
+    const app = req.app as any;
+    return app.get('io') || null;
+}
+
+// Helper function to format game data for socket events
+function formatGameForSocket(game: any): GameState {
+    return {
+        id: game.game_id.toString(),
+        players: game.players ? game.players.map((p: Player) => p.username) : [],
+        state: game.state,
+        createdAt: new Date()
+    };
+}
+
+// Helper function to get game with players from database
+async function getGameWithPlayers(gameId: string | number) {
+    const result = await pool.query(
+        `SELECT g.*,
+            COALESCE(json_agg(
+                CASE WHEN u.user_id IS NOT NULL
+                THEN json_build_object(
+                    'user_id', u.user_id,
+                    'username', u.username
+                )
+                END
+            ) FILTER (WHERE u.user_id IS NOT NULL), '[]') as players
+        FROM game g
+        LEFT JOIN game_players gp ON g.game_id = gp.game_id
+        LEFT JOIN "user" u ON gp.user_id = u.user_id
+        WHERE g.game_id = $1
+        GROUP BY g.game_id`,
+        [gameId]
+    );
+    return result.rows[0];
+}
 
 // GET: List all active games (lobby)
 const listGames: RequestHandler = async (req, res, next) => {
@@ -108,6 +154,7 @@ router.get("/:gameId", async (req: RequestWithSession, res: Response, next: Next
 const startGame: RequestHandler = async (req, res, next) => {
     const gameId = req.params.gameId;
     const userId = (req as RequestWithSession).session.userId;
+    const io = getIOInstance(req);
 
     if (!userId) {
         res.status(401).json({ error: "Not authenticated" });
@@ -127,10 +174,26 @@ const startGame: RequestHandler = async (req, res, next) => {
         }
 
         // update game state
-        await pool.query(
-            "UPDATE game SET state = 'playing' WHERE game_id = $1 AND state = 'waiting'",
+        const updateResult = await pool.query(
+            "UPDATE game SET state = 'playing' WHERE game_id = $1 AND state = 'waiting' RETURNING *",
             [gameId]
         );
+
+        if (updateResult.rows.length === 0) {
+            res.status(400).json({ error: "Game not found or already started" });
+            return;
+        }
+
+        // Get updated game data and emit socket event
+        if (io) {
+            const gameData = await getGameWithPlayers(gameId);
+            const socketData = formatGameForSocket(gameData);
+            io.emit('game:stateChanged', {
+                gameId: gameId,
+                state: 'playing',
+                players: socketData.players
+            });
+        }
 
         res.json({ message: "Game started" });
     } catch (error) {
@@ -142,8 +205,10 @@ const startGame: RequestHandler = async (req, res, next) => {
 const joinGame: RequestHandler = async (req, res, next) => {
     const gameId = req.params.gameId;
     const userId = (req as RequestWithSession).session.userId;
+    const username = (req as RequestWithSession).session.username;
+    const io = getIOInstance(req);
 
-    if (!userId) {
+    if (!userId || !username) {
         res.status(401).json({ error: "Not authenticated" });
         return;
     }
@@ -168,28 +233,60 @@ const joinGame: RequestHandler = async (req, res, next) => {
 
         if (playerCheck.rows.length > 0) {
             // User is already in the game, let them rejoin
-            res.json({ message: "Rejoined game successfully" });
+            res.json({ message: "Already in game" });
+            return;
+        }
+
+        // Check if game is full
+        const currentPlayerCount = await pool.query(
+            "SELECT COUNT(*) as count FROM game_players WHERE game_id = $1",
+            [gameId]
+        );
+
+        if (parseInt(currentPlayerCount.rows[0].count) >= 4) {
+            res.status(400).json({ error: "Game is full" });
             return;
         }
 
         // Get next position for the player (0-based)
-        const positionResult = await pool.query(
-            "SELECT COUNT(*) FROM game_players WHERE game_id = $1",
-            [gameId]
-        );
-        const nextPosition = parseInt(positionResult.rows[0].count, 10);
+        const nextPosition = parseInt(currentPlayerCount.rows[0].count);
 
-        // Join the game (add to players table)
-        await pool.query(
-            "INSERT INTO game_players (game_id, user_id, position) VALUES ($1, $2, $3)",
-            [gameId, userId, nextPosition]
-        );
+        // Begin transaction
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
 
-        // Update player count
-        await pool.query(
-            "UPDATE game SET current_num_players = current_num_players + 1 WHERE game_id = $1",
-            [gameId]
-        );
+            // Join the game (add to players table)
+            await client.query(
+                "INSERT INTO game_players (game_id, user_id, position) VALUES ($1, $2, $3)",
+                [gameId, userId, nextPosition]
+            );
+
+            // Update player count
+            await client.query(
+                "UPDATE game SET current_num_players = current_num_players + 1 WHERE game_id = $1",
+                [gameId]
+            );
+
+            await client.query('COMMIT');
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+
+        // Get updated game data and emit socket event
+        if (io) {
+            const gameData = await getGameWithPlayers(gameId);
+            const socketData = formatGameForSocket(gameData);
+            
+            io.emit('game:joined', {
+                gameId: gameId,
+                players: socketData.players,
+                state: gameData.state
+            });
+        }
 
         res.json({ message: "Joined game successfully" });
     } catch (error) {
@@ -200,29 +297,59 @@ const joinGame: RequestHandler = async (req, res, next) => {
 // POST: Create a new game
 const createGame: RequestHandler = async (req, res, next) => {
     const userId = (req as RequestWithSession).session.userId;
+    const username = (req as RequestWithSession).session.username;
+    const io = getIOInstance(req);
 
-    if (!userId) {
+    if (!userId || !username) {
         res.status(401).json({ error: "Not authenticated" });
         return;
     }
 
     try {
-        // Create new game, set yourself as the first player
-        const result = await pool.query(
-            `INSERT INTO game (max_num_players, current_num_players, state) 
-             VALUES ($1, $2, $3)
-             RETURNING game_id`,
-            [4, 1, 'waiting'] // Default max players to 4, current to 1
-        );
+        // Begin transaction
+        const client = await pool.connect();
+        let gameId: number;
         
-        const gameId = result.rows[0].game_id;
+        try {
+            await client.query('BEGIN');
 
-        // Add creator as first player, position 0
-        await pool.query(
-            `INSERT INTO game_players (game_id, user_id, position) 
-             VALUES ($1, $2, $3)`,
-            [gameId, userId, 0]
-        );
+            // Create new game, set yourself as the first player
+            const gameResult = await client.query(
+                `INSERT INTO game (max_num_players, current_num_players, state) 
+                 VALUES ($1, $2, $3)
+                 RETURNING game_id`,
+                [4, 1, 'waiting'] // Default max players to 4, current to 1
+            );
+            
+            gameId = gameResult.rows[0].game_id;
+
+            // Add creator as first player, position 0
+            await client.query(
+                `INSERT INTO game_players (game_id, user_id, position) 
+                 VALUES ($1, $2, $3)`,
+                [gameId, userId, 0]
+            );
+
+            await client.query('COMMIT');
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+
+        // actual game start code
+        // Emit socket event for real-time updates
+        if (io) {
+            const newGameData: GameState = {
+                id: gameId.toString(),
+                players: [username],
+                state: 'waiting',
+                createdAt: new Date()
+            };
+            
+            io.emit('game:created', newGameData);
+        }
 
         res.json({ id: gameId });
     } catch (error) {
@@ -230,9 +357,52 @@ const createGame: RequestHandler = async (req, res, next) => {
     }
 };
 
+// POST: End a game - New endpoint to properly end games
+const endGame: RequestHandler = async (req, res, next) => {
+    const gameId = req.params.gameId;
+    const userId = (req as RequestWithSession).session.userId;
+    const io = getIOInstance(req);
+
+    if (!userId) {
+        res.status(401).json({ error: "Not authenticated" });
+        return;
+    }
+
+    try {
+        // Check if user is in the game (could add additional authorization here)
+        const playerCheck = await pool.query(
+            "SELECT * FROM game_players WHERE game_id = $1 AND user_id = $2",
+            [gameId, userId]
+        );
+
+        if (playerCheck.rows.length === 0) {
+            res.status(403).json({ error: "Not a player in this game" });
+            return;
+        }
+
+        // Update game state
+        await pool.query(
+            "UPDATE game SET state = 'ended' WHERE game_id = $1",
+            [gameId]
+        );
+
+        // Emit socket event
+        if (io) {
+            io.emit('game:ended', { gameId: gameId });
+        }
+
+        res.json({ message: "Game ended successfully" });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// Route definitions
 router.get("/", listGames);
-router.post("/:gameId/start", startGame);
-router.post("/:gameId/join", joinGame);
+router.get("/:gameId", router.get("/:gameId")); // Keep the existing route handler
 router.post("/", createGame);
+router.post("/:gameId/join", joinGame);
+router.post("/:gameId/start", startGame);
+router.post("/:gameId/end", endGame); // New endpoint
 
 export default router;
