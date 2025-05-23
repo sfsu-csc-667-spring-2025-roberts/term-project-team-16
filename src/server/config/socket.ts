@@ -5,17 +5,18 @@ import { ExtendedError } from 'socket.io/dist/namespace';
 import handleLobbyConnection from '../socket-handlers/lobby';
 import handleGameConnection from '../socket-handlers/game';
 
-// Define an interface for the socket object that includes your custom properties
+// types for our custom socket class
 export interface AugmentedSocket extends SocketIOSocket {
     userId?: number;
     username?: string;
 }
 
-// Improved wrapper for express middleware to work with socket.io
+//  wrapper for express middleware to work with socket.io by making the formats for both express and socket io fit each other
+// idk we just copied the stack, but at least I learned a lot about typescript and fixing sockets
 const wrap = (middleware: RequestHandler) => (socket: SocketIOSocket, next: (err?: ExtendedError | undefined) => void) => {
     const req = socket.request as ExpressRequest;
     
-    // Create a more complete mock response object
+    // this might make sockets work sometimes
     const res = {
         setHeader: () => res,
         getHeader: () => undefined,
@@ -44,7 +45,7 @@ const wrap = (middleware: RequestHandler) => (socket: SocketIOSocket, next: (err
 };
 
 export function configureSockets(io: Server, sessionMiddleware: RequestHandler): void {
-    // Socket.IO CORS configuration
+    // CORS config for socket io
     io.engine.on("initial_headers", (headers: Record<string, string>, req) => {
         headers["Access-Control-Allow-Credentials"] = "true";
         const origin = req.headers.origin;
@@ -53,9 +54,9 @@ export function configureSockets(io: Server, sessionMiddleware: RequestHandler):
         }
     });
 
-    // Configure engine options
-    io.engine.opts.pingInterval = 25000;  // Increased from 10000
-    io.engine.opts.pingTimeout = 20000;   // Increased from 5000
+    // socket io server timeouts
+    io.engine.opts.pingInterval = 25000;  
+    io.engine.opts.pingTimeout = 20000;   
     io.engine.opts.upgradeTimeout = 10000;
     io.engine.opts.maxHttpBufferSize = 1e6;
 

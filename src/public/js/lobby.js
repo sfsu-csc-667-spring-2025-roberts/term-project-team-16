@@ -9,7 +9,7 @@ const socket = io({
     timeout: 10000
 });
 
-// Enhanced connection event handlers with debugging
+// socket debuggers
 socket.on('connect', () => {
     console.log('Connected to server with transport:', socket.io.engine.transport.name);
     document.getElementById('connection-status')?.classList.remove('disconnected');
@@ -32,7 +32,7 @@ socket.on('error', (error) => {
     handleConnectionError('An error occurred. Trying to reconnect...');
 });
 
-// Handle user presence
+// user presence checks
 socket.on('lobby:userJoined', (data) => {
     appendSystemMessage(`${data.username} joined the lobby`);
 });
@@ -71,49 +71,46 @@ function appendSystemMessage(text) {
     }
 }
 
-// Handle chat functionality
+// chat forms
 const chatForm = document.getElementById('lobby-message-form');
 const chatInput = document.getElementById('lobby-message-input');
 const chatMessages = document.getElementById('lobby-chat-messages');
 const submitButton = chatForm?.querySelector('button[type="submit"]');
 
-// Check authentication status
-socket.on('auth:status', (data) => {
-    console.log('Auth status received:', data);
-    
-    if (chatInput && submitButton) {
-        if (!data.authenticated) {
-            chatInput.placeholder = 'Please login to send messages...';
-            chatInput.disabled = true;
-            submitButton.disabled = true;
-            socket.auth = { authenticated: false };
-        } else {
-            chatInput.placeholder = 'Type your message...';
-            chatInput.disabled = false;
-            submitButton.disabled = false;
-            socket.auth = { 
-                authenticated: true, 
-                username: data.username,
-                userId: data.userId 
-            };
-        }
-    }
-    
-    // IMPORTANT: Fetch games after auth status is received
-    // This ensures we have the userId when rendering game elements
-    if (!gameState.hasInitialLoad) {
-        console.log('Initial games fetch after auth status');
-        fetchGames();
-        gameState.hasInitialLoad = true;
-    } else {
-        // If games were already loaded, re-render them with correct auth info
-        console.log('Re-rendering games with auth info');
-        const currentGamesData = getCurrentGamesData();
-        if (currentGamesData.length > 0) {
-            rerenderCurrentGames(currentGamesData);
-        }
-    }
+// receiving messages
+socket.on('lobby:newMessage', data => {
+    appendMessage(data);
 });
+
+// loading chat history
+socket.on('lobby:loadMessages', messages => {
+    chatMessages.innerHTML = '';
+    messages.forEach(msg => appendMessage(msg));
+});
+
+function appendMessage(data) {
+    const el = document.createElement('li');
+    el.className = 'chat-message';
+    // Escape HTML in username and content to prevent XSS
+    const username = data.username ? escapeHtml(data.username) : 'Anonymous';
+    const content = escapeHtml(data.content);
+    el.innerHTML = `<strong>${username}</strong>: ${content} <small>${new Date(data.created_at).toLocaleTimeString()}</small>`;
+    chatMessages.appendChild(el);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// idk if this is true, but claude said this is standard to help xss
+// like I can barely find anything about this being something I need to do
+// this is the kind of false positive preppy bullshit LLMs lie to you about
+// whatever its front end only anyways because I am never hosting this garbage
+function escapeHtml(unsafe) {
+    return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
 
 // Handle sending messages
 chatForm?.addEventListener('submit', async (e) => {
@@ -140,53 +137,115 @@ chatForm?.addEventListener('submit', async (e) => {
     }
 });
 
-// Handle receiving messages
-socket.on('lobby:newMessage', data => {
-    appendMessage(data);
-});
-
-// Handle loading chat history
-socket.on('lobby:loadMessages', messages => {
-    chatMessages.innerHTML = '';
-    messages.forEach(msg => appendMessage(msg));
-});
-
-function appendMessage(data) {
-    const el = document.createElement('li');
-    el.className = 'chat-message';
-    // Escape HTML in username and content to prevent XSS
-    const username = data.username ? escapeHtml(data.username) : 'Anonymous';
-    const content = escapeHtml(data.content);
-    el.innerHTML = `<strong>${username}</strong>: ${content} <small>${new Date(data.created_at).toLocaleTimeString()}</small>`;
-    chatMessages.appendChild(el);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-}
-
-// Helper function to prevent XSS
-function escapeHtml(unsafe) {
-    return unsafe
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-}
-
-// Game-related functionality
+// buttons I know how to make these!!!!
 const createGameBtn = document.getElementById('create-game');
 const activeGamesContainer = document.getElementById('active-games');
 
-// Game list pagination state
+// 
 const gameState = {
     currentPage: 1,
     totalPages: 1,
-    hasInitialLoad: false, // Track if we've done the initial load
-    currentGamesData: [] // Store current games data for re-rendering
+    hasInitialLoad: false,  //check for page start load
+    currentGamesData: [] // stores array of games so we dont kill server, I really dont know how to support this infinite number of games thing
 };
+
+// ===== HELPER FUNCTIONS FOR INCREMENTAL UPDATES =====
+
+// Update a single game element in the DOM
+function updateSingleGameElement(gameId, gameData) {
+    const gameElement = document.querySelector(`[data-game-id="${gameId}"]`);
+    if (!gameElement) {
+        console.log(`Game ${gameId} not found in current view, skipping update`);
+        return false;
+    }
+    
+    console.log(`Updating game ${gameId} in place`);
+    const updatedElement = createGameElement(gameData);
+    gameElement.replaceWith(updatedElement);
+    return true;
+}
+
+// Add a new game to the top of the list (for page 1 only)
+function addNewGameToTop(gameData) {
+    if (gameState.currentPage !== 1) {
+        return false; // Don't add if not on first page
+    }
+    
+    const gamesGrid = document.getElementById('active-games');
+    if (!gamesGrid) return false;
+    
+    console.log(`Adding new game ${gameData.game_id || gameData.id} to top of list`);
+    const gameElement = createGameElement(gameData);
+    gamesGrid.insertBefore(gameElement, gamesGrid.firstChild);
+    
+    // Update our local games data
+    gameState.currentGamesData.unshift(gameData);
+    
+    // Remove the last game if we're over the limit (usually 10 per page)
+    const gameElements = gamesGrid.children;
+    if (gameElements.length > 10) {
+        gameElements[gameElements.length - 1].remove();
+        gameState.currentGamesData.pop();
+    }
+    
+    return true;
+}
+
+// Remove a game from the current view
+function removeGameFromView(gameId) {
+    const gameElement = document.querySelector(`[data-game-id="${gameId}"]`);
+    if (!gameElement) {
+        return false;
+    }
+    
+    console.log(`Removing game ${gameId} from view`);
+    gameElement.remove();
+    
+    // Update our local games data
+    gameState.currentGamesData = gameState.currentGamesData.filter(
+        game => game.game_id.toString() !== gameId.toString()
+    );
+    
+    return true;
+}
+
+// Check if a game is currently visible
+function isGameVisible(gameId) {
+    return document.querySelector(`[data-game-id="${gameId}"]`) !== null;
+}
+
+// Update local game data without DOM manipulation
+function updateLocalGameData(gameId, updates) {
+    const gameIndex = gameState.currentGamesData.findIndex(
+        game => game.game_id.toString() === gameId.toString()
+    );
+    
+    if (gameIndex !== -1) {
+        gameState.currentGamesData[gameIndex] = {
+            ...gameState.currentGamesData[gameIndex],
+            ...updates
+        };
+    }
+}
+
+function getCurrentGamesData() {
+    return gameState.currentGamesData || [];
+}
+
+function getCurrentlyVisibleGameIds() {
+    const gamesGrid = document.getElementById('active-games');
+    if (!gamesGrid) return [];
+    
+    return Array.from(gamesGrid.children).map(gameElement => {
+        const button = gameElement.querySelector('button[data-game-id]');
+        return button ? button.getAttribute('data-game-id') : null;
+    }).filter(Boolean);
+}
 
 // Game list functions
 async function fetchGames(page = 1) {
     try {
+        console.log(`Fetching full games list for page ${page}`);
         const response = await fetch(`/games?page=${page}&limit=10`);
         const data = await response.json();
         
@@ -201,147 +260,28 @@ async function fetchGames(page = 1) {
             gamesGrid.appendChild(gameElement);
         });
 
-        // Update pagination
+        // pagination
         gameState.currentPage = data.pagination.currentPage;
         gameState.totalPages = data.pagination.totalPages;
         updatePaginationControls(data.pagination);
     } catch (error) {
         console.error('Error fetching games:', error);
+        showNotification('Failed to load games', 'warning');
     }
 }
 
-// Helper function to get current games data
-function getCurrentGamesData() {
-    return gameState.currentGamesData || [];
-}
-
-// Helper function to re-render current games (useful when auth status changes)
-function rerenderCurrentGames(gamesData) {
-    const gamesGrid = document.getElementById('active-games');
-    if (!gamesGrid || !gamesData || gamesData.length === 0) return;
-    
-    console.log('Re-rendering', gamesData.length, 'games with updated auth info');
-    
-    gamesGrid.innerHTML = ''; // Clear existing games
-    
-    gamesData.forEach(game => {
-        const gameElement = createGameElement(game);
-        gamesGrid.appendChild(gameElement);
-    });
-}
-
-// NEW: Helper function to get currently visible game IDs
-function getCurrentlyVisibleGameIds() {
-    const gamesGrid = document.getElementById('active-games');
-    if (!gamesGrid) return [];
-    
-    return Array.from(gamesGrid.children).map(gameElement => {
-        const button = gameElement.querySelector('button[data-game-id]');
-        return button ? button.getAttribute('data-game-id') : null;
-    }).filter(Boolean);
-}
-
-// NEW: Show notification for new games when not on page 1
-function showNewGameNotification() {
-    showNotification('New game created! Go to page 1 to see it.', 'info');
-}
-
-// NEW: Show notification for game updates
-function showGameUpdateNotification(message) {
-    showNotification(message, 'info');
-}
-
-// NEW: Generic notification system
-function showNotification(message, type = 'info') {
-    // Remove existing notification if present
-    const existing = document.querySelector('.lobby-notification');
-    if (existing) {
-        existing.remove();
-    }
-    
-    const notification = document.createElement('div');
-    notification.className = `lobby-notification ${type}`;
-    notification.textContent = message;
-    notification.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        padding: 12px 20px;
-        border-radius: 6px;
-        color: white;
-        font-size: 14px;
-        z-index: 1000;
-        cursor: pointer;
-        animation: slideInFromRight 0.3s ease-out;
-        ${type === 'info' ? 'background: #2196F3;' : ''}
-        ${type === 'success' ? 'background: #4CAF50;' : ''}
-        ${type === 'warning' ? 'background: #FF9800;' : ''}
-    `;
-    
-    // Add CSS animation if not already present
-    if (!document.querySelector('#notification-animation')) {
-        const style = document.createElement('style');
-        style.id = 'notification-animation';
-        style.textContent = `
-            @keyframes slideInFromRight {
-                0% { transform: translateX(100%); opacity: 0; }
-                100% { transform: translateX(0); opacity: 1; }
-            }
-            @keyframes slideOutToRight {
-                0% { transform: translateX(0); opacity: 1; }
-                100% { transform: translateX(100%); opacity: 0; }
-            }
-        `;
-        document.head.appendChild(style);
-    }
-    
-    // Click to dismiss
-    notification.addEventListener('click', () => {
-        notification.style.animation = 'slideOutToRight 0.3s ease-in';
-        setTimeout(() => notification.remove(), 300);
-    });
-    
-    document.body.appendChild(notification);
-    
-    // Auto-dismiss after 5 seconds
-    setTimeout(() => {
-        if (notification.parentNode) {
-            notification.style.animation = 'slideOutToRight 0.3s ease-in';
-            setTimeout(() => notification.remove(), 300);
-        }
-    }, 5000);
-}
+// OPTIMIZED: Only fetch latest when absolutely necessary
 async function fetchLatestGames() {
-    try {
-        const response = await fetch(`/games?page=1&limit=10`);
-        const data = await response.json();
-        
-        const gamesGrid = document.getElementById('active-games');
-        gamesGrid.innerHTML = ''; // Clear existing games
-        
-        data.games.forEach(game => {
-            const gameElement = createGameElement(game);
-            gamesGrid.appendChild(gameElement);
-        });
-
-        // Update pagination state to page 1
-        gameState.currentPage = 1;
-        gameState.totalPages = data.pagination.totalPages;
-        updatePaginationControls(data.pagination);
-        
-        // Add visual indicator that we've jumped to latest games
-        showLatestGamesIndicator();
-    } catch (error) {
-        console.error('Error fetching latest games:', error);
-    }
+    // Only do this for major updates or initial loads
+    console.log('Fetching latest games (full refresh)');
+    await fetchGames(1);
+    showLatestGamesIndicator();
 }
 
-// NEW: Show a brief indicator that we've jumped to the latest games
 function showLatestGamesIndicator() {
     const gamesGrid = document.getElementById('active-games');
     if (!gamesGrid) return;
     
-    // Create a temporary indicator
     const indicator = document.createElement('div');
     indicator.className = 'latest-games-indicator';
     indicator.textContent = 'Showing latest games';
@@ -416,21 +356,21 @@ function createGameElement(game) {
     }
     
     div.setAttribute('data-user-in-game', isPlayerInGame ? 'true' : 'false');
-    div.setAttribute('data-game-id', game.game_id); // Add for easier debugging
+    div.setAttribute('data-game-id', game.game_id || game.id); // Add for easier debugging
     
     div.innerHTML = `
         <div class="game-info">
-            <span class="game-id">Game #${game.game_id}</span>
+            <span class="game-id">Game #${game.game_id || game.id}</span>
             <span class="player-count">${game.players.length} players</span>
             <span class="game-status ${game.state}">${game.state === 'waiting' ? 'Waiting' : 'In Progress'}</span>
         </div>
         <div class="game-actions">
             ${isPlayerInGame ? 
-                `<button class="btn ${game.state === 'playing' ? 'rejoin-game' : 'join-game'}" data-game-id="${game.game_id}">
+                `<button class="btn ${game.state === 'playing' ? 'rejoin-game' : 'join-game'}" data-game-id="${game.game_id || game.id}">
                     ${game.state === 'playing' ? 'Rejoin Game' : 'Return to Game'}
                 </button>` :
                 (game.state === 'waiting' && userId ? 
-                    `<button class="btn join-game" data-game-id="${game.game_id}">Join Game</button>` :
+                    `<button class="btn join-game" data-game-id="${game.game_id || game.id}">Join Game</button>` :
                     '<span class="game-status">In Progress</span>'
                 )
             }
@@ -503,61 +443,215 @@ document.getElementById('create-game')?.addEventListener('click', async () => {
     }
 });
 
-// Handle game state changes
-socket.on('game:stateChanged', (data) => {
-    const gamesGrid = document.getElementById('active-games');
-    if (!gamesGrid) return;
+// Enhanced notifications with better messaging
+function showNewGameNotification() {
+    showNotification('New game available! Go to page 1 to see it.', 'info');
+}
 
-    // Find and update the existing game element if it exists
-    const existingGame = Array.from(gamesGrid.children).find(el => {
-        const button = el.querySelector('button[data-game-id]');
-        return button && button.getAttribute('data-game-id') === data.gameId;
+function showGameUpdateNotification(message) {
+    showNotification(message, 'info');
+}
+
+// Generic notification system
+function showNotification(message, type = 'info') {
+    // Remove existing notification if present
+    const existing = document.querySelector('.lobby-notification');
+    if (existing) {
+        existing.remove();
+    }
+    
+    const notification = document.createElement('div');
+    notification.className = `lobby-notification ${type}`;
+    notification.textContent = message;
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 12px 20px;
+        border-radius: 6px;
+        color: white;
+        font-size: 14px;
+        z-index: 1000;
+        cursor: pointer;
+        animation: slideInFromRight 0.3s ease-out;
+        ${type === 'info' ? 'background: #2196F3;' : ''}
+        ${type === 'success' ? 'background: #4CAF50;' : ''}
+        ${type === 'warning' ? 'background: #FF9800;' : ''}
+    `;
+    
+    // Add CSS animation if not already present
+    if (!document.querySelector('#notification-animation')) {
+        const style = document.createElement('style');
+        style.id = 'notification-animation';
+        style.textContent = `
+            @keyframes slideInFromRight {
+                0% { transform: translateX(100%); opacity: 0; }
+                100% { transform: translateX(0); opacity: 1; }
+            }
+            @keyframes slideOutToRight {
+                0% { transform: translateX(0); opacity: 1; }
+                100% { transform: translateX(100%); opacity: 0; }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+    
+    // Click to dismiss
+    notification.addEventListener('click', () => {
+        notification.style.animation = 'slideOutToRight 0.3s ease-in';
+        setTimeout(() => notification.remove(), 300);
     });
+    
+    document.body.appendChild(notification);
+    
+    // Auto-dismiss after 5 seconds
+    setTimeout(() => {
+        if (notification.parentNode) {
+            notification.style.animation = 'slideOutToRight 0.3s ease-in';
+            setTimeout(() => notification.remove(), 300);
+        }
+    }, 5000);
+}
 
-    if (existingGame) {
-        const gameData = {
-            game_id: data.gameId,
-            state: data.state,
-            players: data.players
-        };
-        const updatedGame = createGameElement(gameData);
-        existingGame.replaceWith(updatedGame);
+// "refresh current page" option for users who want to see all updates
+function addRefreshButton() {
+    const existingButton = document.getElementById('refresh-games');
+    if (existingButton) return; // Already exists
+    
+    const pageControls = document.querySelector('.pagination-controls');
+    if (!pageControls) return;
+    
+    const refreshButton = document.createElement('button');
+    refreshButton.id = 'refresh-games';
+    refreshButton.className = 'btn btn-secondary';
+    refreshButton.textContent = 'Refresh';
+    refreshButton.onclick = () => {
+        console.log('Manual refresh requested');
+        fetchGames(gameState.currentPage);
+    };
+    
+    pageControls.appendChild(refreshButton);
+}
+
+// 
+document.addEventListener('DOMContentLoaded', () => {
+    addRefreshButton();
+});
+
+// ===== OPTIMIZED SOCKET EVENT HANDLERS =====
+
+// auth check with optimized re-rendering
+socket.on('auth:status', (data) => {
+    console.log('Auth status received:', data);
+    
+    if (chatInput && submitButton) {
+        if (!data.authenticated) {
+            chatInput.placeholder = 'Please login to send messages...';
+            chatInput.disabled = true;
+            submitButton.disabled = true;
+            socket.auth = { authenticated: false };
+        } else {
+            chatInput.placeholder = 'Type your message...';
+            chatInput.disabled = false;
+            submitButton.disabled = false;
+            socket.auth = { 
+                authenticated: true, 
+                username: data.username,
+                userId: data.userId 
+            };
+        }
+    }
+    
+    //  initial load handling
+    if (!gameState.hasInitialLoad) {
+        console.log('Initial games fetch after auth status');
+        fetchGames(1); // Start at page 1
+        gameState.hasInitialLoad = true;
     } else {
-        // If game not found in current view, fetch latest games to show updates
-        fetchLatestGames();
+        //  re-render existing games, don't fetch new ones
+        console.log('Re-rendering existing games with updated auth info');
+        if (gameState.currentGamesData.length > 0) {
+            const gamesGrid = document.getElementById('active-games');
+            if (gamesGrid) {
+                gamesGrid.innerHTML = '';
+                gameState.currentGamesData.forEach(game => {
+                    const gameElement = createGameElement(game);
+                    gamesGrid.appendChild(gameElement);
+                });
+            }
+        }
     }
 });
 
-// UPDATED: Handle new game created event - smart update logic
+//  new game created
 socket.on('game:created', (data) => {
     console.log('New game created:', data);
-    // If we're on page 1, refresh to show the new game
-    // If we're on other pages, only refresh if the user created the game
-    if (gameState.currentPage === 1) {
-        fetchLatestGames();
+    
+    // If we're on page 1, add the new game to the top
+    if (addNewGameToTop(data)) {
+        showNotification(`New game #${data.id || data.game_id} created!`, 'success');
     } else {
-        // Check if current user created this game (they would be redirected anyway)
-        // For other users, show a subtle notification instead of jarring page jump
+        // If not on page 1, just show notification
         showNewGameNotification();
     }
 });
 
-// UPDATED: Handle game joined event - smart update logic
+//  game joined
 socket.on('game:joined', (data) => {
     console.log('Game joined:', data);
-    // Always update if we can see the game in current view
-    const currentlyVisibleGameIds = getCurrentlyVisibleGameIds();
-    if (currentlyVisibleGameIds.includes(data.gameId) || gameState.currentPage === 1) {
-        fetchGames(gameState.currentPage); // Refresh current page
+    
+    // Try to update the specific game if it's visible
+    const gameData = {
+        game_id: data.gameId,
+        players: data.players.map ? data.players.map(username => ({ user_id: null, username })) : data.players, // Handle both formats
+        state: data.state
+    };
+    
+    if (updateSingleGameElement(data.gameId, gameData)) {
+        showNotification(`Player joined game #${data.gameId}`, 'info');
+        // Update our local data too
+        updateLocalGameData(data.gameId, gameData);
+    } else if (gameState.currentPage === 1) {
+        // Only fetch if game should be visible but isn't (edge case)
+        console.log('Game not visible but should be, refreshing page 1');
+        fetchGames(1);
     } else {
         showGameUpdateNotification(`Game #${data.gameId} updated`);
     }
 });
 
-// UPDATED: Handle game deleted/ended event - smart update logic
+//  game ended
 socket.on('game:ended', (data) => {
     console.log('Game ended:', data);
-    // Always update current view since ended games get removed
-    fetchGames(gameState.currentPage);
+    
+    // Remove the game from view if it's visible
+    if (removeGameFromView(data.gameId)) {
+        showNotification(`Game #${data.gameId} ended`, 'info');
+        
+        // If we're running low on games on this page, try to fetch more
+        const gamesGrid = document.getElementById('active-games');
+        if (gamesGrid && gamesGrid.children.length < 5 && gameState.currentPage < gameState.totalPages) {
+            console.log('Running low on games, fetching current page to backfill');
+            fetchGames(gameState.currentPage);
+        }
+    }
 });
 
+// new game state change api call
+socket.on('game:stateChanged', (data) => {
+    console.log('Game state changed:', data);
+    
+    const gameData = {
+        game_id: data.gameId,
+        state: data.state,
+        players: data.players
+    };
+    
+    if (updateSingleGameElement(data.gameId, gameData)) {
+        updateLocalGameData(data.gameId, gameData);
+        showNotification(`Game #${data.gameId} ${data.state}`, 'info');
+    } else if (gameState.currentPage === 1) {
+        // Only refresh if we're on page 1 and the game should be visible
+        fetchLatestGames();
+    }
+});

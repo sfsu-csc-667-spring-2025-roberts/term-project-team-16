@@ -4,7 +4,7 @@ import bcrypt from 'bcrypt';
 import pool from '../config/database';
 
 const router = express.Router();
-const saltRounds = 10; // For bcrypt password hashing
+const saltRounds = 10; 
 
 // GET /auth/register - Display registration page
 router.get('/register', (req: Request, res: Response) => {
@@ -26,7 +26,7 @@ router.post('/register', async (req: Request, res: Response) => {
         return res.status(400).render('register', { error: 'Passwords do not match.' });
     }
 
-    // Basic validation (you might want more robust validation)
+    // yes I did just take the auto complete, yes I can't believe vscode copilot thinks thats reasonable
     if (password.length < 6) {
          return res.status(400).render('register', { error: 'Password must be at least 6 characters long.' });
     }
@@ -52,7 +52,7 @@ router.post('/register', async (req: Request, res: Response) => {
         // Hash the password
         const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-        // Insert the new user
+        // add user to table
         const newUserResult = await client.query(
             'INSERT INTO "user" (email, username, password) VALUES ($1, $2, $3) RETURNING user_id, username',
             [email, username, hashedPassword]
@@ -60,12 +60,12 @@ router.post('/register', async (req: Request, res: Response) => {
 
         const newUser = newUserResult.rows[0];
 
-        // Automatically log in the user by setting up the session
+        // insta log in
         req.session.userId = newUser.user_id;
         req.session.username = newUser.username;
 
-        // Redirect to a protected page or home page
-        res.redirect('/'); // Or perhaps a dashboard or lobby page
+        // redirect
+        res.redirect('/'); 
 
     } catch (error) {
         console.error('Registration error:', error);
@@ -75,11 +75,7 @@ router.post('/register', async (req: Request, res: Response) => {
     }
 });
 
-// src/server/routes/auth.ts (continued)
-
-// ... (registration routes are above)
-
-// GET /auth/login - Display login page
+// GET /auth/login - gets login page, look I was really new to this whole typescript backend thing, I have done a js backend once before
 router.get('/login', (req: Request, res: Response) => {
   if (req.session.userId) { // If already logged in, redirect
       return res.redirect('/');
@@ -87,7 +83,7 @@ router.get('/login', (req: Request, res: Response) => {
   res.render('login', { error: null, message: null });
 });
 
-// POST /auth/login - Handle login submission
+// POST /auth/login - login submit
 router.post('/login', async (req: Request, res: Response) => {
   const { usernameOrEmail, password } = req.body;
 
@@ -97,8 +93,7 @@ router.post('/login', async (req: Request, res: Response) => {
 
   const client = await pool.connect();
   try {
-      // Find user by username or email
-      // Using COALESCE to handle potential nulls if you only search by one or the other
+      // find user by username or email
       const userResult = await client.query(
           'SELECT * FROM "user" WHERE username = $1 OR email = $1',
           [usernameOrEmail]

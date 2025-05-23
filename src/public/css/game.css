@@ -403,18 +403,6 @@ html, body {
   animation: none !important;
 }
 
-#call-bs-btn {
-  background: linear-gradient(135deg, var(--warning-color) 0%, #fbbf24 100%); /* Yellow highlight */
-  color: var(--text-inverse);
-  font-weight: 700;
-  animation: pulse-warning 2s infinite; /* Subtle pulsing effect */
-}
-
-@keyframes pulse-warning {
-  0%, 100% { box-shadow: var(--shadow-md); }
-  50% { box-shadow: var(--shadow-lg), 0 0 25px rgba(251, 191, 36, 0.6); }
-}
-
 /* Game Log */
 .game-log {
   background: linear-gradient(135deg, var(--game-surface) 0%, var(--game-surface-elevated) 100%);

@@ -3,7 +3,13 @@ import { Session } from "express-session";
 import { RequestHandler } from "express-serve-static-core";
 import { QueryResult } from "pg";
 import pool from "../../config/database";
+//yes our whole API is in websockets, I basically followed along lectures with AI for the lobby chat sockets and then made something similar for the game logic
+//and yes this would be a nightmare to convert to other cardgames or besides the turn structure, maintain, or secure, but I learned stuff
+//also I would rather move to my next project and continue job applying than make this project better
+//  I already have like 20 webapps to put on my resume and my first typescript one is a nightmare
+//  at this point I'd just be cutting stuff off and refactoring into api routes
 
+//types
 interface CustomSession extends Session {
     userId?: number;
     username?: string;
@@ -109,7 +115,7 @@ const startGame: RequestHandler = async (req, res, next) => {
     }
 
     try {
-        // Make sure user is a player in the game
+        // make sure we have players in game
         const playerCheck = await pool.query(
             "SELECT * FROM game_players WHERE game_id = $1 AND user_id = $2",
             [gameId, userId]
@@ -120,7 +126,7 @@ const startGame: RequestHandler = async (req, res, next) => {
             return;
         }
 
-        // Start the game (change state to 'playing')
+        // update game state
         await pool.query(
             "UPDATE game SET state = 'playing' WHERE game_id = $1 AND state = 'waiting'",
             [gameId]
@@ -132,7 +138,7 @@ const startGame: RequestHandler = async (req, res, next) => {
     }
 };
 
-// POST: Join a game
+// join a game, this might be a little server heavy, I really don't know cause I've never made a lot of websockets...
 const joinGame: RequestHandler = async (req, res, next) => {
     const gameId = req.params.gameId;
     const userId = (req as RequestWithSession).session.userId;

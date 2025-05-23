@@ -2,7 +2,8 @@ import { Server as IOServer, Socket as OriginalSocket } from "socket.io";
 import pool from "../config/database";
 import { AugmentedSocket } from "../config/socket"; // Import AugmentedSocket
 
-// Interface for chat message
+// I dont know if this is standard or not, but claude suggested this and it's basically the only way I understand typescript on my own.
+//I've only used it to make open source commits to wowAnalyzer and that's basiclly just warcraftlogs api and some math code.
 interface ChatMessage {
     content: string;
     username: string;
@@ -24,18 +25,18 @@ const activeGames = new Map<string, GameState>(); // gameId -> GameState
 export default function handleLobbyConnection(io: IOServer, socket: AugmentedSocket): void {
     console.log(`[lobby] socket connected: ${socket.id}`);
 
-    // Check authentication and emit status
+    // both of these are directly taken from our socket object and taught me typescript...
     const userId = socket.userId; // Directly use from AugmentedSocket
     const username = socket.username; // Directly use from AugmentedSocket
     
-    // Emit initial auth status
+    // emit auth status, feel use this to do anything that might help someone logging in
     socket.emit('auth:status', {
         authenticated: !!userId,
         username: username || null,
         userId: userId || null
     });
 
-    // If authenticated, add to active users
+    // user joined lobby
     if (username) {
         activeUsers.set(socket.id, username);
         io.emit('lobby:userJoined', { username }); // Emit to all clients in the lobby namespace
@@ -59,7 +60,7 @@ export default function handleLobbyConnection(io: IOServer, socket: AugmentedSoc
         }
     })();
 
-    // Load active games on connect
+    // query for active games, emit to lobby
     (async () => {
         try {
             const result = await pool.query(
@@ -86,7 +87,9 @@ export default function handleLobbyConnection(io: IOServer, socket: AugmentedSoc
         }
     })();
 
-    // Handle new messages
+    // feel free to add more security here since this text entry is probably the most vulnerable thing in the app
+    // could use all sorts of input validation, xss is frontend only atm
+    // https://github.com/socketio/socket.io/issues/126, this is almost as old as I am, kinda based...
     socket.on('lobby:sendMessage', async ({ message }, callback) => {
         try {
             if (!userId || !username) {
@@ -123,10 +126,11 @@ export default function handleLobbyConnection(io: IOServer, socket: AugmentedSoc
     // Game management
     socket.on('game:create', async (data, callback) => {
         try {
+            //login check
             if (!userId || !username) {
                 return callback?.({ error: 'Not authenticated' });
             }
-
+            //associate player to game
             const result = await pool.query(
                 `INSERT INTO game (max_num_players, current_num_players, state)
                  VALUES ($1, $2, $3)
@@ -134,13 +138,13 @@ export default function handleLobbyConnection(io: IOServer, socket: AugmentedSoc
                 [4, 1, 'waiting']
             );
             const gameId = result.rows[0].game_id.toString(); // Ensure gameId is string for Map key
-
+            //get player spot within the game, this probably could hard lock the lobby owner or something if we wanted them to...
             await pool.query(
                 `INSERT INTO game_players (game_id, user_id, position)
                  VALUES ($1, $2, $3)`,
                 [gameId, userId, 0]
             );
-
+            //actual game start code
             const newGame: GameState = {
                 id: gameId,
                 players: [username],
@@ -155,7 +159,7 @@ export default function handleLobbyConnection(io: IOServer, socket: AugmentedSoc
             return callback?.({ error: 'Failed to create game' });
         }
     });
-
+    // join game
     socket.on('game:join', async ({ gameId }, callback) => {
         try {
             if (!userId || !username) {
@@ -191,15 +195,15 @@ export default function handleLobbyConnection(io: IOServer, socket: AugmentedSoc
             return callback?.({ error: 'Failed to join game' });
         }
     });
-
-    socket.on('game:end', async ({ gameId }, callback) => { // gameId is a string here
+    // remove game from lobby when finished
+    socket.on('game:end', async ({ gameId }, callback) => { // this game id is a string
         try {
             if (!userId) {
                 return callback?.({ error: 'Not authenticated' });
             }
             await pool.query(
                 `UPDATE game SET state = 'ended' WHERE game_id = $1`,
-                [parseInt(gameId)] // Ensure gameId is number for DB query
+                [parseInt(gameId)] // this game id is a number....
             );
             const game = activeGames.get(gameId);
             if (game) {
@@ -214,7 +218,7 @@ export default function handleLobbyConnection(io: IOServer, socket: AugmentedSoc
         }
     });
 
-
+    //user left lobby
     socket.on('disconnect', () => {
         console.log(`[lobby] socket disconnected: ${socket.id}`);
         if (username) {
