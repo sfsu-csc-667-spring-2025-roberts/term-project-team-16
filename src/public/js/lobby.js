@@ -79,6 +79,8 @@ const submitButton = chatForm?.querySelector('button[type="submit"]');
 
 // Check authentication status
 socket.on('auth:status', (data) => {
+    console.log('Auth status received:', data);
+    
     if (chatInput && submitButton) {
         if (!data.authenticated) {
             chatInput.placeholder = 'Please login to send messages...';
@@ -94,6 +96,21 @@ socket.on('auth:status', (data) => {
                 username: data.username,
                 userId: data.userId 
             };
+        }
+    }
+    
+    // IMPORTANT: Fetch games after auth status is received
+    // This ensures we have the userId when rendering game elements
+    if (!gameState.hasInitialLoad) {
+        console.log('Initial games fetch after auth status');
+        fetchGames();
+        gameState.hasInitialLoad = true;
+    } else {
+        // If games were already loaded, re-render them with correct auth info
+        console.log('Re-rendering games with auth info');
+        const currentGamesData = getCurrentGamesData();
+        if (currentGamesData.length > 0) {
+            rerenderCurrentGames(currentGamesData);
         }
     }
 });
@@ -162,7 +179,9 @@ const activeGamesContainer = document.getElementById('active-games');
 // Game list pagination state
 const gameState = {
     currentPage: 1,
-    totalPages: 1
+    totalPages: 1,
+    hasInitialLoad: false, // Track if we've done the initial load
+    currentGamesData: [] // Store current games data for re-rendering
 };
 
 // Game list functions
@@ -170,6 +189,9 @@ async function fetchGames(page = 1) {
     try {
         const response = await fetch(`/games?page=${page}&limit=10`);
         const data = await response.json();
+        
+        // Store games data for potential re-rendering
+        gameState.currentGamesData = data.games;
         
         const gamesGrid = document.getElementById('active-games');
         gamesGrid.innerHTML = ''; // Clear existing games
@@ -186,6 +208,185 @@ async function fetchGames(page = 1) {
     } catch (error) {
         console.error('Error fetching games:', error);
     }
+}
+
+// Helper function to get current games data
+function getCurrentGamesData() {
+    return gameState.currentGamesData || [];
+}
+
+// Helper function to re-render current games (useful when auth status changes)
+function rerenderCurrentGames(gamesData) {
+    const gamesGrid = document.getElementById('active-games');
+    if (!gamesGrid || !gamesData || gamesData.length === 0) return;
+    
+    console.log('Re-rendering', gamesData.length, 'games with updated auth info');
+    
+    gamesGrid.innerHTML = ''; // Clear existing games
+    
+    gamesData.forEach(game => {
+        const gameElement = createGameElement(game);
+        gamesGrid.appendChild(gameElement);
+    });
+}
+
+// NEW: Helper function to get currently visible game IDs
+function getCurrentlyVisibleGameIds() {
+    const gamesGrid = document.getElementById('active-games');
+    if (!gamesGrid) return [];
+    
+    return Array.from(gamesGrid.children).map(gameElement => {
+        const button = gameElement.querySelector('button[data-game-id]');
+        return button ? button.getAttribute('data-game-id') : null;
+    }).filter(Boolean);
+}
+
+// NEW: Show notification for new games when not on page 1
+function showNewGameNotification() {
+    showNotification('New game created! Go to page 1 to see it.', 'info');
+}
+
+// NEW: Show notification for game updates
+function showGameUpdateNotification(message) {
+    showNotification(message, 'info');
+}
+
+// NEW: Generic notification system
+function showNotification(message, type = 'info') {
+    // Remove existing notification if present
+    const existing = document.querySelector('.lobby-notification');
+    if (existing) {
+        existing.remove();
+    }
+    
+    const notification = document.createElement('div');
+    notification.className = `lobby-notification ${type}`;
+    notification.textContent = message;
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 12px 20px;
+        border-radius: 6px;
+        color: white;
+        font-size: 14px;
+        z-index: 1000;
+        cursor: pointer;
+        animation: slideInFromRight 0.3s ease-out;
+        ${type === 'info' ? 'background: #2196F3;' : ''}
+        ${type === 'success' ? 'background: #4CAF50;' : ''}
+        ${type === 'warning' ? 'background: #FF9800;' : ''}
+    `;
+    
+    // Add CSS animation if not already present
+    if (!document.querySelector('#notification-animation')) {
+        const style = document.createElement('style');
+        style.id = 'notification-animation';
+        style.textContent = `
+            @keyframes slideInFromRight {
+                0% { transform: translateX(100%); opacity: 0; }
+                100% { transform: translateX(0); opacity: 1; }
+            }
+            @keyframes slideOutToRight {
+                0% { transform: translateX(0); opacity: 1; }
+                100% { transform: translateX(100%); opacity: 0; }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+    
+    // Click to dismiss
+    notification.addEventListener('click', () => {
+        notification.style.animation = 'slideOutToRight 0.3s ease-in';
+        setTimeout(() => notification.remove(), 300);
+    });
+    
+    document.body.appendChild(notification);
+    
+    // Auto-dismiss after 5 seconds
+    setTimeout(() => {
+        if (notification.parentNode) {
+            notification.style.animation = 'slideOutToRight 0.3s ease-in';
+            setTimeout(() => notification.remove(), 300);
+        }
+    }, 5000);
+}
+async function fetchLatestGames() {
+    try {
+        const response = await fetch(`/games?page=1&limit=10`);
+        const data = await response.json();
+        
+        const gamesGrid = document.getElementById('active-games');
+        gamesGrid.innerHTML = ''; // Clear existing games
+        
+        data.games.forEach(game => {
+            const gameElement = createGameElement(game);
+            gamesGrid.appendChild(gameElement);
+        });
+
+        // Update pagination state to page 1
+        gameState.currentPage = 1;
+        gameState.totalPages = data.pagination.totalPages;
+        updatePaginationControls(data.pagination);
+        
+        // Add visual indicator that we've jumped to latest games
+        showLatestGamesIndicator();
+    } catch (error) {
+        console.error('Error fetching latest games:', error);
+    }
+}
+
+// NEW: Show a brief indicator that we've jumped to the latest games
+function showLatestGamesIndicator() {
+    const gamesGrid = document.getElementById('active-games');
+    if (!gamesGrid) return;
+    
+    // Create a temporary indicator
+    const indicator = document.createElement('div');
+    indicator.className = 'latest-games-indicator';
+    indicator.textContent = 'Showing latest games';
+    indicator.style.cssText = `
+        position: absolute;
+        top: -30px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #4CAF50;
+        color: white;
+        padding: 5px 15px;
+        border-radius: 4px;
+        font-size: 12px;
+        z-index: 1000;
+        animation: fadeInOut 3s ease-in-out;
+    `;
+    
+    // Add CSS animation if not already present
+    if (!document.querySelector('#latest-games-animation')) {
+        const style = document.createElement('style');
+        style.id = 'latest-games-animation';
+        style.textContent = `
+            @keyframes fadeInOut {
+                0% { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+                20% { opacity: 1; transform: translateX(-50%) translateY(0); }
+                80% { opacity: 1; transform: translateX(-50%) translateY(0); }
+                100% { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+    
+    // Position the games grid relatively if not already
+    if (getComputedStyle(gamesGrid).position === 'static') {
+        gamesGrid.style.position = 'relative';
+    }
+    
+    gamesGrid.appendChild(indicator);
+    
+    // Remove indicator after animation
+    setTimeout(() => {
+        if (indicator.parentNode) {
+            indicator.parentNode.removeChild(indicator);
+        }
+    }, 3000);
 }
 
 function updatePaginationControls(pagination) {
@@ -205,9 +406,17 @@ function createGameElement(game) {
     div.className = 'game-item';
     
     // Check if current user is in the game
-    const userId = socket.auth?.userId;
-    const isPlayerInGame = game.players.some(p => p.user_id === userId);
+    // Add defensive programming for auth not being available yet
+    const userId = socket.auth?.userId || null;
+    const isPlayerInGame = userId && game.players.some(p => p.user_id === userId);
+    
+    // Add debug logging to help track auth issues
+    if (!userId && socket.connected) {
+        console.log('Warning: Creating game element without userId. Auth status:', socket.auth);
+    }
+    
     div.setAttribute('data-user-in-game', isPlayerInGame ? 'true' : 'false');
+    div.setAttribute('data-game-id', game.game_id); // Add for easier debugging
     
     div.innerHTML = `
         <div class="game-info">
@@ -220,7 +429,7 @@ function createGameElement(game) {
                 `<button class="btn ${game.state === 'playing' ? 'rejoin-game' : 'join-game'}" data-game-id="${game.game_id}">
                     ${game.state === 'playing' ? 'Rejoin Game' : 'Return to Game'}
                 </button>` :
-                (game.state === 'waiting' ? 
+                (game.state === 'waiting' && userId ? 
                     `<button class="btn join-game" data-game-id="${game.game_id}">Join Game</button>` :
                     '<span class="game-status">In Progress</span>'
                 )
@@ -314,28 +523,43 @@ socket.on('game:stateChanged', (data) => {
         const updatedGame = createGameElement(gameData);
         existingGame.replaceWith(updatedGame);
     } else {
-        // If game not found in current view, refresh the whole list
-        fetchGames(gameState.currentPage);
+        // If game not found in current view, fetch latest games to show updates
+        fetchLatestGames();
     }
 });
 
-// Handle new game created event
+// UPDATED: Handle new game created event - smart update logic
 socket.on('game:created', (data) => {
-    // Refresh games list when a new game is created
-    fetchGames(gameState.currentPage);
+    console.log('New game created:', data);
+    // If we're on page 1, refresh to show the new game
+    // If we're on other pages, only refresh if the user created the game
+    if (gameState.currentPage === 1) {
+        fetchLatestGames();
+    } else {
+        // Check if current user created this game (they would be redirected anyway)
+        // For other users, show a subtle notification instead of jarring page jump
+        showNewGameNotification();
+    }
 });
 
-// Handle game joined event
+// UPDATED: Handle game joined event - smart update logic
 socket.on('game:joined', (data) => {
-    // Refresh games list when someone joins a game
-    fetchGames(gameState.currentPage);
+    console.log('Game joined:', data);
+    // Always update if we can see the game in current view
+    const currentlyVisibleGameIds = getCurrentlyVisibleGameIds();
+    if (currentlyVisibleGameIds.includes(data.gameId) || gameState.currentPage === 1) {
+        fetchGames(gameState.currentPage); // Refresh current page
+    } else {
+        showGameUpdateNotification(`Game #${data.gameId} updated`);
+    }
 });
 
-// Handle game deleted/ended event
+// UPDATED: Handle game deleted/ended event - smart update logic
 socket.on('game:ended', (data) => {
-    // Refresh games list when a game ends
+    console.log('Game ended:', data);
+    // Always update current view since ended games get removed
     fetchGames(gameState.currentPage);
 });
 
-// Initial fetch of games
-fetchGames();
+// Initial fetch of games will happen after auth:status is received
+// This prevents the race condition where games are rendered before we know the user's auth status
