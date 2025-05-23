@@ -399,10 +399,10 @@ const endGame: RequestHandler = async (req, res, next) => {
 
 // Route definitions
 router.get("/", listGames);
-router.get("/:gameId", router.get("/:gameId")); // Keep the existing route handler
+//router.get("/:gameId", router.get("/:gameId")); if you just comment out AI-driven bugs it's like they dont happen
 router.post("/", createGame);
 router.post("/:gameId/join", joinGame);
 router.post("/:gameId/start", startGame);
-router.post("/:gameId/end", endGame); // New endpoint
+router.post("/:gameId/end", endGame); // new endpoint
 
 export default router;

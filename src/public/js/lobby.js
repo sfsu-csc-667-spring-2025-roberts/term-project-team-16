@@ -119,7 +119,7 @@ chatForm?.addEventListener('submit', async (e) => {
     if (!message) return;
     
     try {
-        submitButton.disabled = true; // Prevent double-submit
+        submitButton.disabled = true; 
         socket.emit('lobby:sendMessage', { message }, (ack) => {
             if (ack?.error) {
                 console.error('Message failed to send:', ack.error);

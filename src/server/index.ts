@@ -50,7 +50,9 @@ const io = new IOServer(server, {
 // Configure socket handlers with session middleware
 configureSockets(io, sessionMiddleware);
 
+app.set('io', io); // Store io instance for route access
 // Set view engine
+
 app.set("views", path.join(process.cwd(), "src", "server", "views"));
 app.set("view engine", "ejs");
 
