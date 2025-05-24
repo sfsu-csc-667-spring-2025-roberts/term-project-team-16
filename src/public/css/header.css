@@ -38,3 +38,9 @@ nav ul li a:hover {
   color: var(--text-inverse);
   transform: translateY(-1px);
 }
+
+nav ul li a {
+  letter-spacing: 0.3px;
+  padding: var(--spacing-sm) calc(var(--spacing-md) + 0.25rem);
+  cursor: pointer;
+}
