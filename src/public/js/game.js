@@ -18,6 +18,10 @@ class GameClient {
     //but it's ok cause its like client-side
     //also if you want the game and site to run a lot faster remove the .io in index.js, I just thought it looked good for testing but it will not scale well for sure
     //it basically means emits for every game are going everywhere right now, but I liked the live game list.
+
+    // this page is full of me breaking sockets and the other pages are me breaking typescript.
+
+
     init() {
         this.gameId = this.extractGameIdFromUrl();
         this.initializeSocket();
@@ -51,7 +55,7 @@ class GameClient {
     }
 
     setupSocketEventListeners() {
-        // Connection events (keep existing)
+        // socket logs
         this.socket.on('connect', () => {
             console.log('[GameClient] Connected to server');
             this.isConnected = true;
@@ -88,7 +92,6 @@ class GameClient {
             this.updateConnectionStatus('Connection failed - please refresh the page', 'error');
         });
 
-        // Game events with throttling
         this.socket.on('game:stateUpdate', (gameState) => {
             const now = Date.now();
             if (now - this.lastStateUpdate < 100) return;
@@ -163,13 +166,11 @@ class GameClient {
     }
 
     setupEventListeners() {
-        // Start game button
         const startBtn = document.getElementById('start-game-btn');
         if (startBtn) {
             startBtn.addEventListener('click', () => this.startGame());
         }
 
-        // Simplified play cards form (no declaration dropdown)
         const playForm = document.getElementById('play-form');
         if (playForm) {
             playForm.addEventListener('submit', (e) => {
@@ -178,13 +179,11 @@ class GameClient {
             });
         }
 
-        // Call BS button
         const callBSBtn = document.getElementById('call-bs-btn');
         if (callBSBtn) {
             callBSBtn.addEventListener('click', () => this.callBS());
         }
 
-        // Chat form
         const chatForm = document.getElementById('game-chat-form');
         if (chatForm) {
             chatForm.addEventListener('submit', (e) => {
@@ -279,12 +278,11 @@ class GameClient {
             return;
         }
 
-        // Check if pile is empty to determine if we need declaration
+        // check if pile is empty to determine if we need declaration
         const pileIsEmpty = this.gameState?.pileCardCount === 0;
         let declaredRank = null;
 
         if (pileIsEmpty) {
-            // Pile is empty - player must choose a rank
             declaredRank = document.getElementById('declared-rank-select')?.value;
             if (!declaredRank) {
                 alert('Please select a declared rank.');
@@ -292,14 +290,14 @@ class GameClient {
             }
         }
 
-        // Disable form to prevent double submission
+        //  form to prevent double submission
         const playForm = document.getElementById('play-form');
         if (playForm) {
             playForm.style.pointerEvents = 'none';
             playForm.style.opacity = '0.7';
         }
 
-        // Build request - only include declaredRank if pile is empty
+        // only include declaredRank if pile is empty
         const request = {
             gameId: this.gameId,
             cardsToPlayIds: selectedCardIds
@@ -310,7 +308,7 @@ class GameClient {
         }
 
         this.socket.emit('game:playCards', request, (response) => {
-            // Re-enable form
+            // re-enable form
             if (playForm) {
                 playForm.style.pointerEvents = '';
                 playForm.style.opacity = '';
@@ -326,7 +324,6 @@ class GameClient {
         });
     }
 
-    // UPDATED BS BUTTON FUNCTION WITH PROPER ERROR HANDLING
     callBS() {
         if (!this.isConnected) {
             this.updateConnectionStatus('Not connected to server', 'error');
@@ -335,12 +332,10 @@ class GameClient {
 
         const callBSBtn = document.getElementById('call-bs-btn');
         
-        // Check if button is already processing a request
         if (callBSBtn && callBSBtn.disabled && callBSBtn.textContent === 'Calling BS...') {
             return;
         }
 
-        // Client-side validation with user-friendly errors
         if (!this.gameState?.lastPlay) {
             alert("No play to call BS on! Wait for someone to play cards first.");
             return;
@@ -351,13 +346,11 @@ class GameClient {
             return;
         }
 
-        // Additional check for game state
         if (this.gameState?.gameState?.state !== 'playing' && this.gameState?.gameState?.state !== 'pending_win') {
             alert("You can only call BS during an active game!");
             return;
         }
 
-        // Set button to loading state
         if (callBSBtn) {
             callBSBtn.disabled = true;
             callBSBtn.textContent = 'Calling BS...';
@@ -368,7 +361,7 @@ class GameClient {
         }
 
         this.socket.emit('game:callBS', { gameId: this.gameId }, (response) => {
-            // Always re-enable the button after response
+            // always re-enable the button after response
             this.resetBSButton();
             
             if (response?.error) {
@@ -378,7 +371,7 @@ class GameClient {
         });
     }
 
-    // Helper function to reset BS button state
+    // helper function to reset BS button state
     resetBSButton() {
         const callBSBtn = document.getElementById('call-bs-btn');
         if (callBSBtn) {
@@ -434,8 +427,6 @@ class GameClient {
         this.updatePileInfo(gameState);
         this.updateRequiredRank(gameState);
         this.updatePendingWin(gameState.pendingWin);
-        
-        // Reset BS button state on any game state update
         this.resetBSButton();
     }
 
@@ -464,7 +455,6 @@ class GameClient {
             const pileIsEmpty = gameState.pileCardCount === 0;
             
             if (isPlaying && !pileIsEmpty && gameState.requiredRank) {
-                // Show required rank when pile has cards
                 requiredRankDisplay.style.display = 'block';
                 requiredRankValue.textContent = gameState.requiredRank;
                 
@@ -474,7 +464,6 @@ class GameClient {
                     requiredRankDisplay.className = 'required-rank-display bg-blue-600 text-white p-3 rounded-lg mb-4 text-center';
                 }
             } else {
-                // Hide when pile is empty (player chooses) or not playing
                 requiredRankDisplay.style.display = 'none';
             }
         }
@@ -539,8 +528,8 @@ class GameClient {
                 </div>
             `;
 
-            // Highlight cards that match the required rank
-            if (this.gameState?.requiredRank) {
+            // highlight
+            if (this.gameState?.requiredRank && this.gameState?.isMyTurn) {
                 const requiredValue = this.rankToValue(this.gameState.requiredRank);
                 if (card.value === requiredValue) {
                     cardElement.classList.add('valid-card');
@@ -583,7 +572,7 @@ class GameClient {
         });
     }
 
-    // UPDATED GAME ACTIONS WITH ALWAYS-VISIBLE BS BUTTON
+    // bs button rework 2.0
     updateGameActions(gameState) {
         const actionsContainer = document.getElementById('game-actions-container');
         const playForm = document.getElementById('play-form');
@@ -596,21 +585,15 @@ class GameClient {
         const isPendingWin = gameState.gameState.state === 'pending_win';
         const isMyTurn = gameState.isMyTurn;
         const pileIsEmpty = gameState.pileCardCount === 0;
-
-        // Show/hide start button
+        //showers and hiders
         if (startBtn) {
             startBtn.style.display = (isPlaying || isPendingWin) ? 'none' : 'block';
         }
-
-        // Show/hide actions container
         actionsContainer.style.display = (isPlaying || isPendingWin) ? 'block' : 'none';
-
-        // Control declaration dropdown based on pile state
         const declaredRankSelect = document.getElementById('declared-rank-select');
         const declaredRankLabel = document.querySelector('label[for="declared-rank-select"]');
         
         if (declaredRankSelect && declaredRankLabel) {
-            // Show dropdown only when pile is empty AND it's my turn
             if (pileIsEmpty && isMyTurn && isPlaying && !isPendingWin) {
                 declaredRankSelect.style.display = 'block';
                 declaredRankLabel.style.display = 'block';
@@ -621,11 +604,11 @@ class GameClient {
             }
         }
 
-        // UPDATED BS BUTTON LOGIC - Always show when game is active
+        // UPDATED BS BUTTON LOGIC
         if (callBSBtn) {
             if (isPlaying || isPendingWin) {
                 callBSBtn.style.display = 'block';
-                // Reset button state if it was disabled from a previous error
+                // error handling because copilot suggested it ig...
                 if (callBSBtn.disabled && callBSBtn.textContent === 'Calling BS...') {
                     this.resetBSButton();
                 }
@@ -644,7 +627,7 @@ class GameClient {
             }
         }
     }
-
+    // changed this when adding current card to be played into the pile area
     updatePileInfo(gameState) {
         const pileInfoElement = document.getElementById('pile-info');
         const declarationElement = document.getElementById('current-declaration');
@@ -663,6 +646,7 @@ class GameClient {
         }
     }
 
+    //timing window for calling bs.
     updatePendingWin(pendingWin) {
         const pendingWinDisplay = document.getElementById('pending-win-display');
         
@@ -848,7 +832,7 @@ class GameClient {
     }
 }
 
-// Initialize the game client when the page loads
+// wait for dom to load
 document.addEventListener('DOMContentLoaded', () => {
     console.log('[GameClient] DOM loaded, initializing game client...');
     window.gameClient = new GameClient();

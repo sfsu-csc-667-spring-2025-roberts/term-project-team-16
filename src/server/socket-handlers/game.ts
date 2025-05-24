@@ -154,7 +154,6 @@ function rankToValue(rank: string): number {
     return rankMap[rank] || 1;
 }
 
-// Optimized database queries
 async function getPlayerGamePlayerId(gameId: string, userId: number): Promise<number | null> {
     const gameIdInt = parseInt(gameId, 10);
     if (isNaN(gameIdInt)) {
@@ -241,7 +240,6 @@ async function fetchFullGameStateForClient(gameId: string, targetUserId?: number
         requiredRank
     };
 
-    // maybe we should know who is pending a win I guess? neat idea copilot
     if (gameDbState.state === 'pending_win') {
         const pendingWin = GameStateManager.getPendingWin(gameId);
         if (pendingWin) {
@@ -255,7 +253,6 @@ async function fetchFullGameStateForClient(gameId: string, targetUserId?: number
         }
     }
 
-    // r
     if (targetUserId) {
         const playerInfo = players.find(p => p.userId === targetUserId);
         if (playerInfo) {
@@ -279,7 +276,6 @@ async function broadcastGameState(io: IOServer, gameId: string) {
         return;
     }
 
-    // Batch the user-specific queries
     const userPromises = allPlayersState.players.map(async (player) => {
         const specificGameState = await fetchFullGameStateForClient(gameId, player.userId);
         if (specificGameState) {
@@ -300,7 +296,6 @@ async function broadcastGameState(io: IOServer, gameId: string) {
     });
 }
 
-// Improved turn advancement with better error handling
 async function advanceTurn(gameId: string): Promise<number> {
     const client = await pool.connect();
     const gameIdInt = parseInt(gameId, 10);
@@ -308,7 +303,6 @@ async function advanceTurn(gameId: string): Promise<number> {
     try {
         await client.query('BEGIN');
         
-        // Get current turn player and all active players in one query
         const gameStateResult = await client.query(
             `SELECT 
                 g.state as game_state,
@@ -337,28 +331,24 @@ async function advanceTurn(gameId: string): Promise<number> {
             return -1;
         }
 
-        // Clear current turn
         if (current_position !== -1) {
             await client.query(
                 `UPDATE game_players SET is_turn = FALSE WHERE game_id = $1 AND position = $2`,
                 [gameIdInt, current_position]
             );
         }
-
-        // Calculate next position
-        let nextPosition = activePlayerPositions[0]; // Default to first player
+        // turn advancement player seeking
+        let nextPosition = activePlayerPositions[0]; 
         if (current_position !== -1) {
             const currentIndex = activePlayerPositions.indexOf(current_position);
             if (currentIndex !== -1) {
                 nextPosition = activePlayerPositions[(currentIndex + 1) % activePlayerPositions.length];
             } else {
-                // Current player not in active list, find next higher position or wrap around
                 const higherPositions = activePlayerPositions.filter((pos: number) => pos > current_position);
                 nextPosition = higherPositions.length > 0 ? higherPositions[0] : activePlayerPositions[0];
             }
         }
 
-        // Set next turn
         const nextPlayerResult = await client.query(
             `UPDATE game_players SET is_turn = TRUE 
              WHERE game_id = $1 AND position = $2 AND is_winner = FALSE 
@@ -383,7 +373,6 @@ async function advanceTurn(gameId: string): Promise<number> {
     }
 }
 
-// Improved win finalization
 async function finalizePlayerWin(io: IOServer, gameId: string, winnerGamePlayerId: number, winnerPosition: number, winnerUsername: string) {
     const gameIdInt = parseInt(gameId, 10);
     const client = await pool.connect();
@@ -391,7 +380,6 @@ async function finalizePlayerWin(io: IOServer, gameId: string, winnerGamePlayerI
     try {
         await client.query('BEGIN');
         
-        // Update game and player states in batch
         await Promise.all([
             client.query(`UPDATE game SET state = 'ended' WHERE game_id = $1`, [gameIdInt]),
             client.query(`UPDATE game_players SET is_winner = TRUE, is_turn = FALSE WHERE game_player_id = $1`, [winnerGamePlayerId]),
@@ -400,10 +388,8 @@ async function finalizePlayerWin(io: IOServer, gameId: string, winnerGamePlayerI
         
         await client.query('COMMIT');
         
-        // Clean up all game state
         GameStateManager.cleanupGame(gameId);
         
-        // Emit events
         const gameOverData = {
             winnerPosition,
             winnerUsername,
@@ -423,7 +409,7 @@ async function finalizePlayerWin(io: IOServer, gameId: string, winnerGamePlayerI
         client.release();
     }
 }
-
+//sockets for live events
 export default function handleGameConnection(io: IOServer, socket: AugmentedSocket): void {
     console.log(`[GameTS:handleGameConnection] Initializing for socketId=${socket.id}, userId=${socket.userId || 'N/A'}, username=${socket.username || 'N/A'}`);
 
@@ -487,7 +473,6 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
             callback?.({ error: 'Failed to load messages.' });
         }
     });
-
     socket.on('game:start', async ({ gameId }, callback) => {
         if (!socket.userId || !socket.username) return callback?.({ error: 'Not authenticated.' });
         const gameIdInt = parseInt(gameId, 10);
@@ -552,7 +537,6 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
         try {
             await client.query('BEGIN');
             
-            // Get player info and game state
             const playerGameResult = await client.query(
                 `SELECT 
                     gp.game_player_id, gp.position, gp.is_turn, g.state as game_state
@@ -569,18 +553,15 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
             if (gameState !== 'playing') throw new Error('Game is not currently in playing state.');
             if (!isTurn) throw new Error("Not your turn.");
 
-            // Determine what rank should be played
             const pile = GameStateManager.getGamePile(gameId);
             let finalDeclaredRank: string;
             
             if (pile.length === 0) {
-                // Empty pile - player must declare a rank
                 if (!declaredRank || typeof declaredRank !== 'string') {
                     throw new Error('You must declare a rank when the pile is empty.');
                 }
                 finalDeclaredRank = declaredRank;
             } else {
-                // Cards in pile - server determines next rank automatically
                 const requiredRank = getNextRequiredRank(gameId);
                 if (!requiredRank) {
                     throw new Error('Unable to determine required rank.');
@@ -588,7 +569,6 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
                 finalDeclaredRank = requiredRank;
             }
 
-            // Validate and remove cards from hand
             const cardValidationPromises = cardsToPlayIds.map(async (cardIdStr: string) => {
                 const cardId = parseInt(cardIdStr, 10);
                 if (isNaN(cardId)) throw new Error(`Invalid card ID: ${cardIdStr}`);
@@ -607,11 +587,9 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
 
             const playedCards = await Promise.all(cardValidationPromises);
             
-            // Update game state
             pile.push(...playedCards);
             GameStateManager.setGamePile(gameId, pile);
             
-            // Store play info with the final declared rank
             const playInfo: LastPlayInfo = {
                 gamePlayerId,
                 playerPosition,
@@ -622,7 +600,6 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
             };
             GameStateManager.setLastPlay(gameId, playInfo);
             
-            // Check remaining cards and handle win condition
             const remainingCardsCount = await client.query(
                 `SELECT COUNT(*) as count FROM cards_held WHERE game_player_id = $1`,
                 [gamePlayerId]
@@ -630,7 +607,6 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
             const cardsLeft = parseInt(remainingCardsCount.rows[0].count, 10);
             
             if (cardsLeft === 0) {
-                // Enter pending win state
                 await client.query(`UPDATE game SET state = 'pending_win' WHERE game_id = $1`, [gameIdInt]);
                 await client.query(`UPDATE game_players SET is_turn = FALSE WHERE game_id = $1`, [gameIdInt]);
                 
@@ -641,7 +617,6 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
                 };
                 GameStateManager.setPendingWin(gameId, pendingWinInfo);
                 
-                // Set 15-second auto-win timer
                 const winTimer = setTimeout(async () => {
                     try {
                         await finalizePlayerWin(io, gameId, gamePlayerId, playerPosition, socket.username || `P${playerPosition + 1}`);
@@ -660,7 +635,6 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
                     message: `${socket.username || `P${playerPosition + 1}`} played their last card! Call BS within 15 seconds or they win!`
                 });
             } else {
-                // Normal play - advance turn
                 await advanceTurn(gameId);
             }
             
@@ -686,7 +660,7 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
         }
     });
 
-    // IMPROVED BS CALL HANDLER WITH BETTER ERROR MESSAGES
+    // 
     socket.on('game:callBS', async ({ gameId }, callback) => {
         if (!socket.userId || !socket.username) return callback?.({ error: 'Not authenticated.' });
         
@@ -750,12 +724,10 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
             let eventMessage: string;
 
             if (wasBluff) {
-                // Bluff was caught - challenged player gets pile
                 pileReceiverGamePlayerId = challengedGamePlayerId;
                 pileReceiverPosition = challengedPlayerPosition;
                 eventMessage = `${callerUsername} correctly called BS! ${challengedUsername} was bluffing and takes the pile (${pile.length} cards).`;
             } else {
-                // Incorrect BS call - caller gets pile
                 pileReceiverGamePlayerId = callerGamePlayerId;
                 pileReceiverPosition = callerPosition;
                 eventMessage = `${callerUsername} called BS, but ${challengedUsername} was NOT bluffing! ${callerUsername} takes the pile (${pile.length} cards).`;
