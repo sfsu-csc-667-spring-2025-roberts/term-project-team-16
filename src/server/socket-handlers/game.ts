@@ -662,136 +662,203 @@ export default function handleGameConnection(io: IOServer, socket: AugmentedSock
 
     // 
     socket.on('game:callBS', async ({ gameId }, callback) => {
-        if (!socket.userId || !socket.username) return callback?.({ error: 'Not authenticated.' });
+    if (!socket.userId || !socket.username) return callback?.({ error: 'Not authenticated.' });
+    
+    const gameIdInt = parseInt(gameId, 10);
+    const client = await pool.connect();
+    
+    try {
+        await client.query('BEGIN');
         
-        const gameIdInt = parseInt(gameId, 10);
-        const client = await pool.connect();
+        const currentTurnRes = await client.query(
+            `SELECT game_player_id, position FROM game_players 
+             WHERE game_id = $1 AND is_turn = TRUE AND is_winner = FALSE`,
+            [gameIdInt]
+        );
         
-        try {
-            await client.query('BEGIN');
-            
-            const playerInfoRes = await client.query(
-                `SELECT gp.game_player_id, gp.position, g.state as game_state 
-                 FROM game_players gp JOIN game g ON gp.game_id = g.game_id 
-                 WHERE gp.game_id = $1 AND gp.user_id = $2`,
-                [gameIdInt, socket.userId]
-            );
-            
-            if (!playerInfoRes.rows.length) {
-                throw new Error('You are not a player in this game.');
-            }
-            
-            const { game_player_id: callerGamePlayerId, position: callerPosition, game_state: gameState } = playerInfoRes.rows[0];
-            
-            if (gameState !== 'playing' && gameState !== 'pending_win') {
-                throw new Error('You can only call BS during an active game.');
-            }
+        const currentTurnPlayer = currentTurnRes.rows.length > 0 ? currentTurnRes.rows[0] : null;
+        
+        const playerInfoRes = await client.query(
+            `SELECT gp.game_player_id, gp.position, g.state as game_state 
+             FROM game_players gp JOIN game g ON gp.game_id = g.game_id 
+             WHERE gp.game_id = $1 AND gp.user_id = $2`,
+            [gameIdInt, socket.userId]
+        );
+        
+        if (!playerInfoRes.rows.length) {
+            throw new Error('You are not a player in this game.');
+        }
+        
+        const { game_player_id: callerGamePlayerId, position: callerPosition, game_state: gameState } = playerInfoRes.rows[0];
+        
+        if (gameState !== 'playing' && gameState !== 'pending_win') {
+            throw new Error('You can only call BS during an active game.');
+        }
 
-            const lastPlay = GameStateManager.getLastPlay(gameId);
-            if (!lastPlay) {
-                throw new Error('No play to call BS on. Wait for someone to play cards first.');
-            }
-            
-            if (lastPlay.gamePlayerId === callerGamePlayerId) {
-                throw new Error("You cannot call BS on your own play!");
-            }
+        const lastPlay = GameStateManager.getLastPlay(gameId);
+        if (!lastPlay) {
+            throw new Error('No play to call BS on. Wait for someone to play cards first.');
+        }
+        
+        if (lastPlay.gamePlayerId === callerGamePlayerId) {
+            throw new Error("You cannot call BS on your own play!");
+        }
 
+        if (gameState === 'pending_win') {
+            GameStateManager.clearWinTimer(gameId);
+            GameStateManager.clearPendingWin(gameId);
+        }
+
+        // Determine if it was a bluff
+        const { gamePlayerId: challengedGamePlayerId, playerPosition: challengedPlayerPosition, cardsPlayed: actualCardsInLastPlay, declaredRank } = lastPlay;
+        
+        const rankMap: { [key: string]: number } = { 'A':1,'2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'10':10,'J':11,'Q':12,'K':13 };
+        const declaredNumericRank = rankMap[declaredRank.toUpperCase()];
+        const wasBluff = actualCardsInLastPlay.some(card => card.value !== declaredNumericRank);
+
+        // Get challenged player info
+        const challengedPlayerRes = await client.query(
+            `SELECT u.username FROM "user" u 
+             JOIN game_players gp ON u.user_id = gp.user_id 
+             WHERE gp.game_player_id = $1`,
+            [challengedGamePlayerId]
+        );
+        const challengedUsername = challengedPlayerRes.rows[0]?.username || `P${challengedPlayerPosition + 1}`;
+        const callerUsername = socket.username || `P${callerPosition + 1}`;
+
+        const pile = GameStateManager.getGamePile(gameId);
+        let pileReceiverGamePlayerId: number;
+        let pileReceiverPosition: number;
+        let eventMessage: string;
+
+        if (wasBluff) {
+            pileReceiverGamePlayerId = challengedGamePlayerId;
+            pileReceiverPosition = challengedPlayerPosition;
+            eventMessage = `${callerUsername} correctly called BS! ${challengedUsername} was bluffing and takes the pile (${pile.length} cards).`;
+        } else {
+            pileReceiverGamePlayerId = callerGamePlayerId;
+            pileReceiverPosition = callerPosition;
+            eventMessage = `${callerUsername} called BS, but ${challengedUsername} was NOT bluffing! ${callerUsername} takes the pile (${pile.length} cards).`;
+            
+            // If incorrect BS call during pending win, challenged player wins immediately
             if (gameState === 'pending_win') {
-                GameStateManager.clearWinTimer(gameId);
-                GameStateManager.clearPendingWin(gameId);
-            }
-
-            // Determine if it was a bluff
-            const { gamePlayerId: challengedGamePlayerId, playerPosition: challengedPlayerPosition, cardsPlayed: actualCardsInLastPlay, declaredRank } = lastPlay;
-            
-            const rankMap: { [key: string]: number } = { 'A':1,'2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'10':10,'J':11,'Q':12,'K':13 };
-            const declaredNumericRank = rankMap[declaredRank.toUpperCase()];
-            const wasBluff = actualCardsInLastPlay.some(card => card.value !== declaredNumericRank);
-
-            // Get challenged player info
-            const challengedPlayerRes = await client.query(
-                `SELECT u.username FROM "user" u 
-                 JOIN game_players gp ON u.user_id = gp.user_id 
-                 WHERE gp.game_player_id = $1`,
-                [challengedGamePlayerId]
-            );
-            const challengedUsername = challengedPlayerRes.rows[0]?.username || `P${challengedPlayerPosition + 1}`;
-            const callerUsername = socket.username || `P${callerPosition + 1}`;
-
-            const pile = GameStateManager.getGamePile(gameId);
-            let pileReceiverGamePlayerId: number;
-            let pileReceiverPosition: number;
-            let eventMessage: string;
-
-            if (wasBluff) {
-                pileReceiverGamePlayerId = challengedGamePlayerId;
-                pileReceiverPosition = challengedPlayerPosition;
-                eventMessage = `${callerUsername} correctly called BS! ${challengedUsername} was bluffing and takes the pile (${pile.length} cards).`;
-            } else {
-                pileReceiverGamePlayerId = callerGamePlayerId;
-                pileReceiverPosition = callerPosition;
-                eventMessage = `${callerUsername} called BS, but ${challengedUsername} was NOT bluffing! ${callerUsername} takes the pile (${pile.length} cards).`;
+                await finalizePlayerWin(io, gameId, challengedGamePlayerId, challengedPlayerPosition, challengedUsername);
+                await client.query('COMMIT');
                 
-                // If incorrect BS call during pending win, challenged player wins immediately
-                if (gameState === 'pending_win') {
-                    await finalizePlayerWin(io, gameId, challengedGamePlayerId, challengedPlayerPosition, challengedUsername);
-                    await client.query('COMMIT');
+                io.to(`game:${gameId}`).emit('game:bsResult', {
+                    callerPosition,
+                    callerUsername,
+                    challengedPlayerPosition,
+                    challengedUsername,
+                    wasBluff,
+                    revealedCards: actualCardsInLastPlay,
+                    pileReceiverPosition,
+                    message: eventMessage + ` ${challengedUsername} wins the game!`
+                });
+                
+                callback?.({ success: true });
+                return;
+            }
+        }
+        
+        if (pile.length > 0) {
+            const insertPromises = pile.map(card => 
+                client.query(
+                    'INSERT INTO cards_held (game_player_id, card_id) VALUES ($1, $2)',
+                    [pileReceiverGamePlayerId, card.card_id]
+                )
+            );
+            await Promise.all(insertPromises);
+        }
+
+        GameStateManager.setGamePile(gameId, []);
+        GameStateManager.clearLastPlay(gameId);
+
+        await client.query(`UPDATE game SET state = 'playing' WHERE game_id = $1`, [gameIdInt]);
+
+ 
+        if (currentTurnPlayer) {
+            // Clear all turns first to avoid conflicts
+            await client.query(
+                `UPDATE game_players SET is_turn = FALSE WHERE game_id = $1`,
+                [gameIdInt]
+            );
+            
+            // Restore turn to the original turn holder (if they're still in the game)
+            const restoreTurnRes = await client.query(
+                `UPDATE game_players SET is_turn = TRUE 
+                 WHERE game_player_id = $1 AND is_winner = FALSE`,
+                [currentTurnPlayer.game_player_id]
+            );
+            
+            if ((restoreTurnRes.rowCount ?? 0) > 0) {
+                console.log(`[GameTS:callBS] Turn preserved for position ${currentTurnPlayer.position} after BS resolution`);
+            } else {
+                // Original turn holder won/left, need to find next player manually
+                // since we're in a transaction and advanceTurn expects its own connection
+                console.log(`[GameTS:callBS] Original turn holder unavailable, setting turn to next active player`);
+                
+                const activePlayersRes = await client.query(
+                    `SELECT game_player_id, position FROM game_players 
+                     WHERE game_id = $1 AND is_winner = FALSE 
+                     ORDER BY position`,
+                    [gameIdInt]
+                );
+                
+                if (activePlayersRes.rows.length > 0) {
+                    // Find next player after the original turn holder
+                    let nextPlayerIndex = 0;
+                    const activePlayers = activePlayersRes.rows;
+                    const originalIndex = activePlayers.findIndex(p => p.position > currentTurnPlayer.position);
+                    if (originalIndex !== -1) {
+                        nextPlayerIndex = originalIndex;
+                    }
                     
-                    io.to(`game:${gameId}`).emit('game:bsResult', {
-                        callerPosition,
-                        callerUsername,
-                        challengedPlayerPosition,
-                        challengedUsername,
-                        wasBluff,
-                        revealedCards: actualCardsInLastPlay,
-                        pileReceiverPosition,
-                        message: eventMessage + ` ${challengedUsername} wins the game!`
-                    });
-                    
-                    callback?.({ success: true });
-                    return;
+                    await client.query(
+                        `UPDATE game_players SET is_turn = TRUE WHERE game_player_id = $1`,
+                        [activePlayers[nextPlayerIndex].game_player_id]
+                    );
                 }
             }
-            
-            if (pile.length > 0) {
-                const insertPromises = pile.map(card => 
-                    client.query(
-                        'INSERT INTO cards_held (game_player_id, card_id) VALUES ($1, $2)',
-                        [pileReceiverGamePlayerId, card.card_id]
-                    )
-                );
-                await Promise.all(insertPromises);
-            }
-
-            GameStateManager.setGamePile(gameId, []);
-            GameStateManager.clearLastPlay(gameId);
-
-            await client.query(`UPDATE game SET state = 'playing' WHERE game_id = $1`, [gameIdInt]);
-
-            await client.query('COMMIT');
-
-            console.log(`[GameTS:callBS] BS resolved: pile given to position ${pileReceiverPosition}, turn stays with current player`);
-
-            io.to(`game:${gameId}`).emit('game:bsResult', {
-                callerPosition,
-                callerUsername,
-                challengedPlayerPosition,
-                challengedUsername,
-                wasBluff,
-                revealedCards: actualCardsInLastPlay,
-                pileReceiverPosition,
-                message: eventMessage
-            });
-
-            await broadcastGameState(io, gameId);
-            callback?.({ success: true });
-            
-        } catch (error: any) {
-            await client.query('ROLLBACK');
-            console.error(`[GameTS:callBS] Error for ${socket.username} in game ${gameId}:`, error);
-            callback?.({ error: error.message || 'Failed to process BS call.' });
-        } finally {
-            client.release();
+        } else {
+            // No one had the turn (edge case), set turn to first active player
+            console.warn(`[GameTS:callBS] No current turn found, setting turn to first active player`);
+            const firstActiveRes = await client.query(
+                `UPDATE game_players SET is_turn = TRUE 
+                 WHERE game_id = $1 AND is_winner = FALSE 
+                 AND game_player_id = (
+                     SELECT game_player_id FROM game_players 
+                     WHERE game_id = $1 AND is_winner = FALSE 
+                     ORDER BY position LIMIT 1
+                 )`,
+                [gameIdInt]
+            );
         }
-    });
+
+        await client.query('COMMIT');
+
+        console.log(`[GameTS:callBS] BS resolved: pile given to position ${pileReceiverPosition}, turn order preserved`);
+
+        io.to(`game:${gameId}`).emit('game:bsResult', {
+            callerPosition,
+            callerUsername,
+            challengedPlayerPosition,
+            challengedUsername,
+            wasBluff,
+            revealedCards: actualCardsInLastPlay,
+            pileReceiverPosition,
+            message: eventMessage
+        });
+
+        await broadcastGameState(io, gameId);
+        callback?.({ success: true });
+        
+    } catch (error: any) {
+        await client.query('ROLLBACK');
+        console.error(`[GameTS:callBS] Error for ${socket.username} in game ${gameId}:`, error);
+        callback?.({ error: error.message || 'Failed to process BS call.' });
+    } finally {
+        client.release();
+    }
+});
 }
