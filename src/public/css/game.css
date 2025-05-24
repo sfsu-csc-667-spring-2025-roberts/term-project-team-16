@@ -93,6 +93,7 @@ html, body {
   gap: var(--spacing-lg);
 }
 
+/* FIXED: Game Sidebar - Constrain to viewport height */
 .game-sidebar {
   position: relative;
   z-index: 1;
@@ -104,10 +105,11 @@ html, body {
   backdrop-filter: blur(10px);
   display: flex;
   flex-direction: column;
-  height: fit-content;
-  /* REMOVED max-height and min-height to allow full player list */
-  min-height: auto;
-  max-height: none;
+  
+  /* NEW: Constrain to viewport height */
+  max-height: calc(100vh - 4rem); /* Account for container padding */
+  min-height: 600px; /* Minimum usable height */
+  overflow: hidden; /* Prevent sidebar itself from scrolling */
 }
 
 /* Game Info Section */
@@ -635,13 +637,28 @@ html, body {
   border-left: 3px solid var(--primary-color);
 }
 
-/* Player List - FIXED: No Scrolling, Always Show All Players */
+/* FIXED: Player List - Allow scrolling when needed */
 .player-list-container {
   margin-bottom: var(--spacing-xl);
   flex-shrink: 0;
-  /* REMOVED: max-height: 200px; */
-  /* REMOVED: overflow-y: auto; */
+  max-height: 40vh; /* Maximum 40% of viewport height */
+  overflow-y: auto; /* Allow scrolling for long player lists */
   max-width: 100%;
+}
+
+/* Add scrollbar styling for player list */
+.player-list-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.player-list-container::-webkit-scrollbar-track {
+  background: var(--game-accent);
+  border-radius: 3px;
+}
+
+.player-list-container::-webkit-scrollbar-thumb {
+  background: var(--game-border-light);
+  border-radius: 3px;
 }
 
 .player-list-container h3 {
@@ -708,9 +725,9 @@ html, body {
   font-weight: 500;
 }
 
-/* Chat Container - Fixed height to accommodate full player list */
+/* FIXED: Chat Container - Flexible height */
 .chat-container {
-  flex: 1;
+  flex: 1; /* Take remaining space */
   display: flex;
   flex-direction: column;
   background: linear-gradient(135deg, var(--game-surface) 0%, var(--game-surface-elevated) 100%);
@@ -718,8 +735,10 @@ html, body {
   overflow: hidden;
   box-shadow: var(--shadow-lg);
   border: 1px solid var(--game-border);
-  height: 400px; /* Fixed height for chat */
-  max-height: 100%;
+  
+  /* NEW: Flexible height instead of fixed */
+  min-height: 250px; /* Minimum usable height */
+  max-height: 100%; /* Don't exceed available space */
 }
 
 .chat-container h3 {
@@ -860,7 +879,7 @@ html, body {
   text-align: center;
 }
 
-/* IMPROVED RESPONSIVE DESIGN */
+/* UPDATED: Responsive adjustments */
 @media (max-width: 1400px) {
   .game-container {
     max-width: 1200px;
@@ -869,11 +888,12 @@ html, body {
   
   .game-sidebar {
     padding: var(--spacing-lg);
-    max-height: none;
+    max-height: calc(100vh - 3rem);
+    min-height: 500px;
   }
   
-  .chat-container {
-    height: 350px;
+  .player-list-container {
+    max-height: 35vh;
   }
 }
 
@@ -892,10 +912,6 @@ html, body {
     padding: var(--spacing-md) var(--spacing-sm);
     min-width: 50px;
   }
-  
-  .chat-container {
-    height: 300px;
-  }
 }
 
 @media (max-width: 1024px) {
@@ -908,13 +924,18 @@ html, body {
   
   .game-sidebar {
     order: -1;
-    max-height: none;
+    max-height: none; /* Remove height constraint on mobile layouts */
     min-height: auto;
     padding: var(--spacing-lg);
   }
   
+  .player-list-container {
+    max-height: 300px; /* Fixed max height on mobile */
+  }
+  
   .chat-container {
-    height: 350px;
+    height: 350px; /* Fixed height on mobile for better UX */
+    flex: none;
   }
   
   .game-buttons {
@@ -976,6 +997,11 @@ html, body {
   
   .chat-container {
     height: 300px;
+    min-height: 250px;
+  }
+  
+  .player-list-container {
+    max-height: 250px;
   }
   
   .chat-form {
@@ -1034,6 +1060,11 @@ html, body {
   
   .chat-container {
     height: 250px;
+    min-height: 200px;
+  }
+  
+  .player-list-container {
+    max-height: 200px;
   }
   
   .chat-form input {
